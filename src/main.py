@@ -5,13 +5,9 @@ from torch.nn.functional import mse_loss as mse
 
 # datasets
 from datasets.spherical_reg import SphericalDataset, COORD, TARGET
-from metrics import psnr
+from metrics.psnr import psnr
 from base_coord_system import BaseCoordSystem, run_main
-from config.opts import get_opts
-
-
-
-
+from config.opts import get_opts, ELEVATION_DATA_PATH
 
 class ImgRegCoordSystem(BaseCoordSystem):
     def setup(self, stage=None):
@@ -19,7 +15,7 @@ class ImgRegCoordSystem(BaseCoordSystem):
 
     def training_step(self, batch, batch_idx):
         pred = self(batch[COORD])['model_out']
- 
+        
         loss = mse(pred, batch[TARGET])
         psnr_ = psnr(pred, batch[TARGET]) 
 
@@ -31,7 +27,7 @@ class ImgRegCoordSystem(BaseCoordSystem):
 
     def validation_step(self, batch, batch_idx):
         pred = self(batch[COORD])['model_out']
-
+        
         loss = mse(pred, batch[TARGET], reduction='none')
 
         log = {'val_loss': loss,

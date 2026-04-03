@@ -32,6 +32,8 @@ class SphericalDataset(Dataset):
         self.elevation_max = elevation.max()
         self.elevations = 2 * ((elevation - self.elevation_min) / 
                                (self.elevation_max - self.elevation_min)) - 1
+        # Reshape from [N] to [N, 1]
+        self.elevations = self.elevations.unsqueeze(-1)
 
     def __len__(self):
         return len(self.elevations)

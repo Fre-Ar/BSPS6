@@ -2,7 +2,7 @@ import argparse
 
 ELEVATION_DATA_PATH = "src/datasets/files/ETOPO1_512x1024.nc"
 
-def get_opts(parser):
+def get_opts():
     parser = argparse.ArgumentParser()
     # Model
     parser.add_argument('--arch', type=str, default='mlp',
@@ -189,7 +189,7 @@ def get_opts(parser):
     parser.set_defaults(ffn_scale=10)
     parser.set_defaults(mapping_input=32)
     
-    parser.set_defaults(img_wh=[1028, 512])
+    parser.set_defaults(img_wh=[1024, 512])
     parser.set_defaults(save_dir='logs/image_regression')
 
     parser.add_argument('--data_path', type=str, default=ELEVATION_DATA_PATH,
@@ -199,5 +199,6 @@ def get_opts(parser):
     parser.set_defaults(act='scaled-sine')
     parser.set_defaults(mlp_act='scaled-sine')
     parser.set_defaults(pe='None')
+    parser.set_defaults(save_vis=True)
     
     return parser.parse_args()

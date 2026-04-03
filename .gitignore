@@ -210,3 +210,4 @@ __marimo__/
 .DS_Store
 src/datasets/files/ETOPO1_Ice_g_gmt4.grd
 src/datasets/files/ETOPO1_Ice_g_gmt4.grd.gz
+logs/

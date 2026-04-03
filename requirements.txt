@@ -6,3 +6,4 @@ scipy
 lightning
 torchvision
 einops
+tensorboard
