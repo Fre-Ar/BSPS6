@@ -1,0 +1,8 @@
+torch
+numpy
+xarray
+netcdf4
+scipy
+lightning
+torchvision
+einops
