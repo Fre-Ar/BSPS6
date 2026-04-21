@@ -1,75 +1,35 @@
 import argparse
+from config.constants import ELEVATION_DATA_PATH, CE_CHOICES
 
-ELEVATION_DATA_PATH = "src/datasets/files/ETOPO1_512x1024.nc"
 
 def get_opts():
     parser = argparse.ArgumentParser()
-    # Model
+    # Model Function
     parser.add_argument('--arch', type=str, default='mlp',
                         choices=['mlp', 'kan', 'kamp'],
-                        help='Model Arch')
+                        help='Model Architecture')
     parser.add_argument('--act', type=str, default='relu',
                         choices=[
                             # MLP Activation Functions
-                            'relu',          'sigmoid',         'sine',
-                            'scaled-sine',   'tanh',            'selu',
-                            'gelu',          'elu',             'prelu',
-                            'silu',          'softplus',        'swish',
-                            'msoftplus',     'sinc',            'gaussian',
-                            'quadratic',     'multi-quadratic', 'laplacian',
-                            'super-gaussian','expsin',          'complexgabor',
-                            'realgabor',
-                            'softexp',       'blu',             'aplu',
-                            'pelu',          'rrelu',           'hardtanh',
-                            'relu6',         'hardsigmoid',     'hardswish',
-                            'celu',          'hardshrink',      'leakyrelu',
-                            'logsigmoid',    'softshrink',      'softsign',
-                            'tanhshrink',    'smoothedrelu',    'gabor',
-                            'dualrbf',
+                            'relu', 'scaled-sine', 'gaussian',
                             # KAN Basis Functions
-                            'bspline',       'grbf',         'rbf', 'myGaussian',
-                            'fourier',       'taylor',       'bsrbf',
-                            'fcn_interpo',   'chebyshev',    'jacobi',
-                            'bessel',        'chebyshev2',   'fibonacci',
-                            'hermite',       'legendre',     'gegenbauer',
-                            'lucas',         'laguerre',     'mexican_hat',
-                            'morlet',        'dog',          'meyer',
-                            'shannon',       'bump',         'relu',
-                            'sine',          
+                            'bspline', 'fourier',       
                         ],
                         help='network structure')
     parser.add_argument('--kan_act', type=str, default='fourier',
                         choices=[
-                            'bspline',       'grbf',         'rbf', 'myGaussian',
-                            'fourier',       'taylor',       'bsrbf',
-                            'fcn_interpo',   'chebyshev',    'jacobi',
-                            'bessel',        'chebyshev2',   'fibonacci',
-                            'hermite',       'legendre',     'gegenbauer',
-                            'lucas',         'laguerre',     'mexican_hat',
-                            'morlet',        'dog',          'meyer',
-                            'shannon',       'bump',         'relu',
-                            'sine',          
+                            'bspline', 'fourier',     
                         ],
-                        help='positional encoding')
+                        help='KAN activation function')
     parser.add_argument('--mlp_act', type=str, default='relu',
                          choices=[
-                            'relu',          'sigmoid',         'sine',
-                            'scaled-sine',   'tanh',            'selu',
-                            'gelu',          'elu',             'prelu',
-                            'silu',          'softplus',        'swish',
-                            'msoftplus',     'sinc',            'gaussian',
-                            'quadratic',     'multi-quadratic', 'laplacian',
-                            'super-gaussian','expsin',          'complexgabor',
-                            'realgabor',
-                            'softexp',       'blu',             'aplu',
-                            'pelu',          'rrelu',           'hardtanh',
-                            'relu6',         'hardsigmoid',     'hardswish',
-                            'celu',          'hardshrink',      'leakyrelu',
-                            'logsigmoid',    'softshrink',      'softsign',
-                            'tanhshrink',    'smoothedrelu',    'gabor',
-                            'dualrbf',
+                            'relu', 'scaled-sine', 'gaussian',
                         ],
-                        help='positional encoding')
+                        help='MLP activation function')
+    # Model Encodings
+    parser.add_argument('--ce', type=str, default='None',
+                        choices=CE_CHOICES,
+                        help='coordinate encoding')
     parser.add_argument('--pe', type=str, default='None',
                         choices=['NeRF', 'RFF', 'None', 'FKAN'],
                         help='positional encoding')
@@ -113,7 +73,7 @@ def get_opts():
     parser.add_argument('--img_wh', nargs="+", type=int, default=[256, 256],
                         help='resolution (img_w, img_h) of the image')
     
-    ###### Positional Encoding
+    ###### Positional Encoding Parameters
     # FFN
     parser.add_argument('--ffn_scale', type=float, default=10.)
     parser.add_argument('--mapping_input', type=int, default=32) # 256

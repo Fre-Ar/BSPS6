@@ -1,0 +1,5 @@
+from datasets.characteristics import characterize_spherical_dataset, print_and_plot_results
+from config.opts import ELEVATION_DATA_PATH
+
+results = characterize_spherical_dataset(ELEVATION_DATA_PATH)
+print_and_plot_results(results)

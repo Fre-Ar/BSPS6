@@ -7,3 +7,5 @@ lightning
 torchvision
 einops
 tensorboard
+pyshtools
+matplotlib
