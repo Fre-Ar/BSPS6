@@ -9,3 +9,5 @@ einops
 tensorboard
 pyshtools
 matplotlib
+healpy
+opencv-python

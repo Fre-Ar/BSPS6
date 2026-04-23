@@ -1,17 +1,25 @@
+
 import xarray as xr
 import torch
 from einops import rearrange
 from torch.nn.functional import mse_loss as mse
 
+# config
+from config.constants import COORD, TARGET
+from config.opts import get_opts
+
 # datasets
-from datasets.spherical_reg import SphericalDataset, COORD, TARGET
+from datasets.spherical_reg import SphericalDataset
 from metrics.psnr import psnr
 from base_coord_system import BaseCoordSystem, run_main
-from config.opts import get_opts, ELEVATION_DATA_PATH
+
 
 class ImgRegCoordSystem(BaseCoordSystem):
     def setup(self, stage=None):
-        self.dataset = SphericalDataset(hparams.data_path)
+        ce_kwargs = dict(getattr(self.hparams, 'encoding_kwargs', {}) or {})
+        self.dataset = SphericalDataset(self.hparams.data_path,
+                                        self.hparams.ce,
+                                        **ce_kwargs)
 
     def training_step(self, batch, batch_idx):
         pred = self(batch[COORD])['model_out']

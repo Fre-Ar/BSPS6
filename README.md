@@ -31,16 +31,9 @@
 
 
 
-# Datasets Characterizations
-## ETOPO1_512x1024.nc
-==================================================
- DATASET CHARACTERISTICS SUMMARY 
-==================================================
-Dynamic Range:      16273.52 (Min: -9823.14, Max: 6450.38)
-Mean Gradient:      313.27 per pixel
-99th %ile Gradient: 2189.56 per pixel (Sharpness)
---------------------------------------------------
-Isotropy CV:        0.6540 (Higher = more anisotropic)
---------------------------------------------------
-Effective Bandwidth (L_95%): Degree 25
-==================================================
+
+The four axes each answer a distinct question about how hard the signal is to represent:
+*L_95*: effective bandwidth. How many frequencies does a spherical Fourier basis need to capture this signal faithfully. A perfectly smooth signal has L_95 = 2. White noise has L_95 = L_max. High L_95 means the signal has detail at many scales, which is exactly the regime where encoding choice should matter most.
+*Isotropy CV*. The coefficient of variation of per-latitude variance. Near 0 means the signal's statistical character doesn't depend on latitude: a truly spherical process, like CMB. Near 1 means latitude matters enormously, like ERA5, where the equator is ~300 K and the poles are ~220 K, so pole-ring variance differs systematically from equator-ring variance. This is the axis that exposes whether naive angular encoding has an unfair advantage (aligned with lat bands) or disadvantage (pole singularity).
+*Mean / P99 gradient*. Mean is average sharpness across the whole signal; P99 is the sharpness of the sharpest 1% of pixels. A large gap between them means most of the signal is smooth but there are isolated edges (e.g. mountains, coastlines, cloud fronts). Small gap means the signal is uniformly noisy.
+*Dynamic range*. Just max − min. Matters for per-channel normalization decisions, not really for representability.
