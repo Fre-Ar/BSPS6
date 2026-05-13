@@ -117,6 +117,10 @@ def run_main(system: BaseCoordSystem, hparams: Namespace):
 
     callbacks = [pbar, early_stopping_callback, checkpoint_callback]
 
+    
+    # Diverging from INR-Bench's `benchmark=True` here to
+    # get deterministic single-seed numbers.
+     
     trainer = Trainer(max_epochs=hparams.num_epochs,
                       callbacks=callbacks,
                       logger=logger,
@@ -126,6 +130,7 @@ def run_main(system: BaseCoordSystem, hparams: Namespace):
                       num_sanity_val_steps=0,
                       log_every_n_steps=1,
                       check_val_every_n_epoch=hparams.check_val_every_n_epoch,
-                      benchmark=True)
+                      benchmark=False,
+                      deterministic='warn')
 
     trainer.fit(system)

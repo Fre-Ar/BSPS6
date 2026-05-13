@@ -348,10 +348,10 @@ def get_opts():
     parser.add_argument('--sh_lmax', type=int, default=32,
                         help='Max SH degree for --ce spherical-harmonics. '
                              'Input dim becomes (L_max+1)^2.')
-    parser.add_argument('--rff_num_features', type=int, default=128,
+    parser.add_argument('--rff_num_features', type=int, default=32,
                         help='Number of random Fourier features for '
                              '--ce spherical-rff. Input dim = 2 * num_features.')
-    parser.add_argument('--rff_sigma', type=float, default=8.0,
+    parser.add_argument('--rff_sigma', type=float, default=10.0,
                         help='Frequency scale σ for spherical-RFF '
                              '(ω ~ N(0, σ² I_3) on cartesian coords).')
     parser.add_argument('--rff_seed', type=int, default=42,

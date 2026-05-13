@@ -138,11 +138,12 @@ def characterize_spherical_dataset(
 def _print_scalar_summary(results: dict, header: str = '') -> None:
     if header:
         print(f"\n--- {header} ---")
-    print(f"Dynamic Range:      {results['dynamic_range']:.4g} "
+    print(f"Dynamic Range:              {results['dynamic_range']:.4g} "
           f"(Min: {results['min_val']:.4g}, Max: {results['max_val']:.4g})")
-    print(f"Mean Gradient:      {results['mean_gradient']:.4g} per pixel")
-    print(f"99th %ile Gradient: {results['p99_gradient']:.4g} per pixel (Sharpness)")
-    print(f"Isotropy CV:        {results['isotropy_cv']:.4f} (Higher = more anisotropic)")
+    print(f"Mean Gradient:              {results['mean_gradient']:.4g} per pixel")
+    print(f"99th %ile Gradient:         {results['p99_gradient']:.4g} per pixel")
+    print(f"Normalized P99 (Sharpness): {results['p99_gradient'] / results['dynamic_range']:.4f}")
+    print(f"Isotropy CV:                {results['isotropy_cv']:.4f} (Higher = more anisotropic)")
     print(f"Effective Bandwidth (L_95%): Degree {results['L_95']}")
 
 

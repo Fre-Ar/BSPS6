@@ -213,3 +213,4 @@ src/datasets/files/!README.md
 logs/
 
 figures/*
+docs/*

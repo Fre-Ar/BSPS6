@@ -9,7 +9,7 @@ from datasets.characteristics import (
 from config.constants import DATASET_TYPES, DATASET_CHOICES, DATASET_CONFIG
 
 
-def main(dataset: DATASET_TYPES = 'etopo1', path: str = None, no_plot: bool = False) -> None:
+def main(dataset: DATASET_TYPES = 'etopo1', path: str = None, no_plot: bool = True) -> None:
     path = path or DATASET_CONFIG[dataset]['path']
     results = characterize_spherical_dataset(path)
 
@@ -28,8 +28,8 @@ def main(dataset: DATASET_TYPES = 'etopo1', path: str = None, no_plot: bool = Fa
 
 
 if __name__ == '__main__':
-    #main('etopo1')
-    #main('era5')
-    #main('cmb')
-    #main('hdri_sky')
+    main('etopo1')
+    main('era5')
+    main('cmb')
+    main('hdri_sky')
     main('hdri_urban')
