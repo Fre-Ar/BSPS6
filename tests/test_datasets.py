@@ -103,9 +103,42 @@ def _check_dataset_loader(dataset: str, encoding: str) -> None:
         assert abs(mean_y00 - expected_y00) < 1e-4, (
             f'SH Y_00 = {mean_y00}, expected {expected_y00}'
         )
+        
+        # ----- Held-out half-pixel-offset eval (preregistration §3.4) -----
+    coords_held, targets_held = sd.make_held_out_eval()
+    expected_N_held = sd.held_out_height * sd.held_out_width
+    assert coords_held.shape == (expected_N_held, expected_dim), (
+        f'{dataset}/{encoding}: held-out coord shape {coords_held.shape}, '
+        f'expected ({expected_N_held}, {expected_dim})'
+    )
+    assert targets_held.shape == (expected_N_held, C), (
+        f'{dataset}/{encoding}: held-out target shape {targets_held.shape}, '
+        f'expected ({expected_N_held}, {C})'
+    )
+    # Held-out targets are bilinear interpolations of training pixels using
+    # the training data's min/max for normalization. Since interpolation
+    # preserves the [min, max] range, held-out targets stay in [-1, 1]
+    # (modulo float slop).
+    assert float(targets_held.min()) >= -1.01, (
+        f'{dataset}/{encoding}: held-out target min '
+        f'{float(targets_held.min())} < -1'
+    )
+    assert float(targets_held.max()) <= 1.01, (
+        f'{dataset}/{encoding}: held-out target max '
+        f'{float(targets_held.max())} > 1'
+    )
+    # Caching: a second call should return the same tensors (same id).
+    coords_held_2, targets_held_2 = sd.make_held_out_eval()
+    assert coords_held_2 is coords_held, 'held-out coords not cached'
+    assert targets_held_2 is targets_held, 'held-out targets not cached'
+
 
     print(f'  OK {dataset}/{encoding}: N={N}, C={C}, coord={tuple(coord.shape)}, '
           f'target range=[{float(sd.targets.min()):.3f},{float(sd.targets.max()):.3f}]')
+    print(f'       held-out: N_held={expected_N_held}, '
+          f'coord={tuple(coords_held.shape)}, target range='
+          f'[{float(targets_held.min()):.3f},{float(targets_held.max()):.3f}]')
+
 
 
 # ---------------------------------------------------------------------------

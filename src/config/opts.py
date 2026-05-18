@@ -304,6 +304,16 @@ def get_opts():
     parser.add_argument('--num_epochs', type=int, default=1000,
                         help='number of epochs')
     
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Global random seed. Default 42 '
+                             'matches INR-Bench. Controls model init, DataLoader '
+                             'workers, and any internal stochasticity. The SRFF '
+                             'frequency-draw uses a separate --rff_seed.')
+    parser.add_argument('--runs_csv', type=str, default='results/runs.csv',
+                        help='Path to append the per-run results row. '
+                             'Set to empty string to disable.')
+    
+    
     # Logs and Vis
     parser.add_argument('--save_vis', default=False, action='store_true',
                         help='save vis or not')

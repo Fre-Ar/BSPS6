@@ -64,23 +64,73 @@ def _extract_targets(ds: xr.Dataset) -> tuple[torch.Tensor, torch.Tensor, torch.
     return targets, target_min, target_max
 
 
-def _lat_lon_meshgrid_radians(ds: xr.Dataset) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return (grid_lat_rad, grid_lon_rad), each (H, W) float32."""
-    lats_deg = torch.tensor(ds['y'].values, dtype=torch.float32)
-    lons_deg = torch.tensor(ds['x'].values, dtype=torch.float32)
-    grid_lat_deg, grid_lon_deg = torch.meshgrid(lats_deg, lons_deg, indexing='ij')
+def _lat_lon_meshgrid_radians_from_arrays(
+        lats_deg: np.ndarray,
+        lons_deg: np.ndarray
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (grid_lat_rad, grid_lon_rad), each (H, W) float32, given 1D lat/lon arrays."""
+    lats_t = torch.tensor(np.asarray(lats_deg), dtype=torch.float32)
+    lons_t = torch.tensor(np.asarray(lons_deg), dtype=torch.float32)
+    grid_lat_deg, grid_lon_deg = torch.meshgrid(lats_t, lons_t, indexing='ij')
     deg2rad = float(np.pi / 180.0)
     return grid_lat_deg * deg2rad, grid_lon_deg * deg2rad
 
 
-def _cartesian_grid(ds: xr.Dataset) -> torch.Tensor:
-    """Unit-sphere Cartesian embedding (N, 3) float32."""
-    grid_lat, grid_lon = _lat_lon_meshgrid_radians(ds)
+def _lat_lon_meshgrid_radians(ds: xr.Dataset) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (grid_lat_rad, grid_lon_rad), each (H, W) float32, from an xarray ds."""
+    return _lat_lon_meshgrid_radians_from_arrays(ds['y'].values, ds['x'].values)
+
+
+def _cartesian_grid_from_arrays(
+    lats_deg: np.ndarray,
+    lons_deg: np.ndarray,
+) -> torch.Tensor:
+    """Unit-sphere Cartesian embedding (N, 3) float32, given 1D lat/lon arrays."""
+    grid_lat, grid_lon = _lat_lon_meshgrid_radians_from_arrays(lats_deg, lons_deg)
     cos_lat = torch.cos(grid_lat)
     x = cos_lat * torch.cos(grid_lon)
     y = cos_lat * torch.sin(grid_lon)
     z = torch.sin(grid_lat)
     return torch.stack([x.flatten(), y.flatten(), z.flatten()], dim=-1)
+
+def _cartesian_grid(ds: xr.Dataset) -> torch.Tensor:
+    """Unit-sphere Cartesian embedding (N, 3) float32, from an xarray ds."""
+    return _cartesian_grid_from_arrays(ds['y'].values, ds['x'].values)
+
+
+def _spherical_rff_coords_from_arrays(
+    lats_deg: np.ndarray,
+    lons_deg: np.ndarray,
+    num_features: int,
+    sigma: float,
+    seed: int,
+) -> torch.Tensor:
+    """SRFF coord tensor (N, 2·num_features) given arbitrary lat/lon arrays.
+    The ω draw is identical for any (lats, lons) given the same seed; only the
+    Cartesian projection points differ. This is what lets held-out eval reuse
+    the same encoding as training without storing ω explicitly."""
+    x_cart = _cartesian_grid_from_arrays(lats_deg, lons_deg)        # (N, 3)
+    
+    # Draw ω once with a reproducible generator. float32 throughout to avoid
+    # matmul dtype promotion downstream.
+    g = torch.Generator().manual_seed(int(seed))
+    omegas = torch.randn(num_features, 3, generator=g,
+                         dtype=torch.float32) * float(sigma)        # (m, 3)
+    proj = x_cart @ omegas.T                                        # (N, m)
+    return torch.cat([torch.cos(proj), torch.sin(proj)], dim=-1)    # (N, 2m)
+
+
+def _spherical_rff_coords(
+        ds: xr.Dataset,
+        num_features: int,
+        sigma: float,
+        seed: int
+    ) -> torch.Tensor:
+    """
+    SRFF coord tensor (N, 2·num_features), from an xarray ds.
+    """
+    return _spherical_rff_coords_from_arrays(ds['y'].values, ds['x'].values, num_features, sigma, seed)
+
 
 
 # ---------------------------------------------------------------------------
@@ -238,19 +288,21 @@ def spherical_harmonics_encoding(ds: xr.Dataset, L_max: int = 32):
 
 def spherical_rff_encoding(
     ds: xr.Dataset,
-    num_features: int = 128,
-    sigma: float = 8.0,
+    num_features: int = 32,
+    sigma: float = 10.0,
     seed: int = 42,
 ):
     """
-    Spherical Random Fourier Features: apply RFF to Cartesian (x, y, z).
+    Spherical Random Fourier Features (SRFF): apply RFF to Cartesian (x, y, z).
 
     ω_i ~ N(0, σ² I₃) drawn ONCE at construction (seeded), then each sample
     is encoded as
 
         [cos(ω_1 · x), …, cos(ω_m · x), sin(ω_1 · x), …, sin(ω_m · x)]
 
-    Input dim = 2 · num_features. At m=128 that's 256 features per sample.
+    Input dim = 2 · num_features. Defaults (num_features=32, sigma=10.0) match
+    INR-Bench's PE-RFF settings.
+    
     Approximates a Gaussian kernel exp(-|x-x'|² / (2σ⁻²)) in R³, which on
     the sphere is monotonically related to geodesic distance — hence
     "approximately geodesic-aware".
@@ -260,19 +312,61 @@ def spherical_rff_encoding(
     if sigma <= 0:
         raise ValueError(f"sigma must be > 0, got {sigma}.")
 
-    x_cart = _cartesian_grid(ds)                                # (N, 3)
-
-    # Draw ω once with a reproducible generator. float32 throughout to avoid
-    # matmul dtype promotion downstream.
-    g = torch.Generator().manual_seed(int(seed))
-    omegas = torch.randn(num_features, 3, generator=g,
-                         dtype=torch.float32) * float(sigma)    # (m, 3)
-
-    proj = x_cart @ omegas.T                                    # (N, m)
-    coords = torch.cat([torch.cos(proj), torch.sin(proj)], dim=-1)  # (N, 2m)
+    coords = _spherical_rff_coords(ds,
+        num_features=num_features, sigma=sigma, seed=seed,
+    )
 
     targets, target_min, target_max = _extract_targets(ds)
     return coords, targets, target_min, target_max
+
+
+
+# ---------------------------------------------------------------------------
+# Array-based coord computation
+# ---------------------------------------------------------------------------
+# `compute_coords` returns only the (N, D_coord) tensor — no targets, no
+# normalization. Used by SphericalDataset.make_held_out_eval() to apply the
+# same encoding to a half-pixel-offset grid the model never sees during
+# training.
+
+def compute_coords(
+    name: str,
+    lats_deg: np.ndarray,
+    lons_deg: np.ndarray,
+    **kwargs,
+) -> torch.Tensor:
+    """Compute the flat (N, D_coord) coordinate tensor for a given encoding.
+
+    Lats and lons are 1D arrays (degrees). The output is a (H·W, D_coord)
+    torch.float32 tensor in the same row-major order as a numpy
+    `meshgrid(lats, lons, indexing='ij').reshape(-1, ...)` operation, where
+    H = len(lats_deg) and W = len(lons_deg).
+    """
+    lats_deg = np.asarray(lats_deg)
+    lons_deg = np.asarray(lons_deg)
+    if name == 'angular':
+        grid_lat, grid_lon = _lat_lon_meshgrid_radians_from_arrays(lats_deg, lons_deg)
+        return torch.stack(
+            [grid_lon.flatten(), grid_lat.flatten()],
+            dim=-1,
+        )
+    if name == 'cartesian':
+        return _cartesian_grid_from_arrays(lats_deg, lons_deg)
+    if name == 'spherical-harmonics':
+        L_max = int(kwargs.get('L_max', 32))
+        if L_max < 0:
+            raise ValueError(f"L_max must be ≥ 0, got {L_max}.")
+        sh = _sh_features(lats_deg, lons_deg, L_max)            # (H, W, (L+1)²)
+        H, W, D = sh.shape
+        return torch.from_numpy(sh.reshape(H * W, D))
+    if name == 'spherical-rff':
+        return _spherical_rff_coords_from_arrays(
+            lats_deg, lons_deg,
+            num_features=int(kwargs.get('num_features', 32)),
+            sigma=float(kwargs.get('sigma', 10.0)),
+            seed=int(kwargs.get('seed', 42)),
+        )
+    raise ValueError(f"Unknown encoding '{name}'.")
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +382,9 @@ def coord_encoding_dim(name: str, **kwargs) -> int:
         L_max = int(kwargs.get('L_max', 32))
         return (L_max + 1) ** 2
     if name == 'spherical-rff':
-        m = int(kwargs.get('num_features', 128))
+        m = int(kwargs.get('num_features', 32))
         return 2 * m
     raise ValueError(f"Unknown encoding '{name}'.")
+
+
+

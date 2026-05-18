@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
+import numpy as np
 import xarray as xr
 from torch.utils.data import Dataset
 
@@ -23,6 +24,7 @@ from .coord_encodings import (
     cartesian_encoding,
     spherical_harmonics_encoding,
     spherical_rff_encoding,
+    compute_coords,
 )
 
 
@@ -69,12 +71,95 @@ class SphericalDataset(Dataset):
         self.coord_dim: int = int(self.coords.shape[-1])
         self.height: int = int(ds.sizes.get('y', ds['y'].size))
         self.width:  int = int(ds.sizes.get('x', ds['x'].size))
+        
+        # Per-axis lat/lon arrays in degrees (length H and W respectively).
+        # Used by breakdown code to recover per-pixel latitude for polar /
+        # equatorial band masks.
+        self.lats_deg: np.ndarray = np.asarray(ds['y'].values)
+        self.lons_deg: np.ndarray = np.asarray(ds['x'].values)
+        
         self.file_path: str = grd_file_path
         self.coordinate_encoding: str = coordinate_encoding
         self.encoding_kwargs: dict = encoding_kwargs
+        
+        # Lazy-initialized held-out cache
+        self._held_out_eval: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+        self._held_out_lats_deg: Optional[np.ndarray] = None
+        self._held_out_lons_deg: Optional[np.ndarray] = None
 
     def __len__(self) -> int:
         return self.targets.shape[0]
 
     def __getitem__(self, idx: int):
         return {COORD: self.coords[idx], TARGET: self.targets[idx]}
+    
+    
+    # ----- Held-out evaluation -----
+    def make_held_out_eval(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build (coords, targets) for the (H-1)×(W-1) half-pixel-offset grid.
+
+        Coords use the same coordinate encoding and the same kwargs (including
+        SRFF seed) as the training data, so the held-out coords inhabit the
+        identical feature space the model trained on — only the spatial
+        positions differ.
+
+        Ground truth at offset positions is obtained by bilinear interpolation
+        of the source signal (via `xarray.interp`). Targets are normalized to
+        [-1, 1] using the TRAINING data's `target_min` / `target_max`, not
+        the held-out signal's own min/max, so the model's outputs and the
+        held-out targets are on the same scale.
+
+        Cached on first call; subsequent calls are O(1).
+        """
+        if self._held_out_eval is not None:
+            return self._held_out_eval
+
+        with xr.open_dataset(self.file_path) as ds:
+            lats_deg = np.asarray(ds['y'].values)
+            lons_deg = np.asarray(ds['x'].values)
+
+            # Half-pixel midpoints: (H-1,) lats, (W-1,) lons. Strictly inside
+            # the source grid, so xr.interp does not need to extrapolate.
+            lats_held = 0.5 * (lats_deg[:-1] + lats_deg[1:])
+            lons_held = 0.5 * (lons_deg[:-1] + lons_deg[1:])
+
+            # Bilinear-interpolate the source signal at the offset grid.
+            ds_held = ds.interp(y=lats_held, x=lons_held, method='linear')
+            z_held = np.asarray(ds_held['z'].values, dtype=np.float32)
+
+        if z_held.ndim == 2:
+            z_held = z_held[..., None]
+        elif z_held.ndim != 3:
+            raise ValueError(f"Unsupported held-out target shape {z_held.shape}.")
+        Hh, Wh, C = z_held.shape
+        assert C == self.num_channels, (
+            f"held-out channels {C} != training channels {self.num_channels}"
+        )
+
+        # Encode the offset positions using the SAME encoding pipeline as
+        # training. For SRFF, this re-uses the same ω draw (same seed).
+        coords_held = compute_coords(
+            self.coordinate_encoding,
+            lats_held, lons_held,
+            **self.encoding_kwargs,
+        )
+
+        # Normalize targets using TRAINING min/max (not held-out min/max).
+        targets_held = torch.from_numpy(z_held.reshape(Hh * Wh, C))
+        denom = (self.target_max - self.target_min).clamp(min=1e-8)
+        targets_held = 2.0 * ((targets_held - self.target_min) / denom) - 1.0
+
+        # Stash the offset lat/lon arrays so per-band breakdown code (Task 16)
+        # can reconstruct the spatial mapping without re-opening the file.
+        self._held_out_lats_deg = lats_held
+        self._held_out_lons_deg = lons_held
+        self._held_out_eval = (coords_held, targets_held)
+        return self._held_out_eval
+
+    @property
+    def held_out_height(self) -> int:
+        return self.height - 1
+
+    @property
+    def held_out_width(self) -> int:
+        return self.width - 1

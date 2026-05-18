@@ -13,6 +13,9 @@ from pytorch_lightning.callbacks import TQDMProgressBar, ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 
+# callbacks
+from callbacks.runs_csv import RunsCSVLogger
+
 class BaseCoordSystem(LightningModule, abc.ABC):
     def __init__(self, hparams: Namespace):
         super().__init__()
@@ -91,8 +94,14 @@ class BaseCoordSystem(LightningModule, abc.ABC):
         return eigenvalues
 
 def run_main(system: BaseCoordSystem, hparams: Namespace):
-    seed_everything(42, workers=True)
-
+    
+    # Re-seed at trainer level. The seed is also applied BEFORE model
+    # construction in main.py (so __init__'s random weight init is
+    # reproducible); this second call covers DataLoader workers and any
+    # post-construction RNG use.
+    seed = int(getattr(hparams, 'seed', 42))
+    seed_everything(seed, workers=True)
+    
     torch.set_float32_matmul_precision('high')
 
     logger = TensorBoardLogger(save_dir=hparams.save_dir,
@@ -116,6 +125,12 @@ def run_main(system: BaseCoordSystem, hparams: Namespace):
     )
 
     callbacks = [pbar, early_stopping_callback, checkpoint_callback]
+    
+    # Append a per-run row to runs.csv. 
+    # Disabled by setting --runs_csv to an empty string.
+    runs_csv_path = getattr(hparams, 'runs_csv', '') or ''
+    if runs_csv_path:
+        callbacks.append(RunsCSVLogger(runs_csv_path))
 
     
     # Diverging from INR-Bench's `benchmark=True` here to
