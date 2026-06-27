@@ -212,6 +212,7 @@ src/datasets/files/*.fits
 src/datasets/files/*.grd
 src/datasets/files/*.gz
 src/datasets/files/*.exr
+src/datasets/files/ERA5_t2m_2023_06_15_1200.nc
 src/datasets/files/!README.md
 logs/
 
