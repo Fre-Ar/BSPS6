@@ -13,10 +13,9 @@ signal of shape (H, W) or (H, W, C)) and returns:
 where N = H*W, and C = 1 for scalar signals or 3 for RGB.
 
 Encodings implemented:
-    angular(ds)                                  -> D_coord = 2
-    cartesian(ds)                                -> D_coord = 3
-    spherical_harmonics(ds, L_max)               -> D_coord = (L_max+1)**2
-    spherical_rff(ds, num_features, sigma, seed) -> D_coord = 2 * num_features
+    angular(ds)                    -> D_coord = 2     (λ, φ) in radians
+    cartesian(ds)                  -> D_coord = 3     (x, y, z) on the unit sphere
+    spherical_harmonics(ds, L_max) -> D_coord = (L_max+1)**2
 
 Convention notes:
     * Latitude in [-90, +90] deg; colatitude = 90 - lat.
@@ -28,9 +27,6 @@ Convention notes:
         Y_l^m(θ,φ)    = √2 ·    Ȳ_l^m(cosθ) · cos(mφ)        for m > 0
         Y_l^{-m}(θ,φ) = √2 ·    Ȳ_l^m(cosθ) · sin(mφ)        for m > 0
       with Ȳ_l^m = √((2l+1)(l-m)! / (4π (l+m)!)) · P_l^m.
-    * Spherical-RFF applies RFF to the CARTESIAN embedding (x,y,z) of the
-      sphere (not to (λ,φ)). This approximates a Gaussian kernel in R^3
-      restricted to S^2 — hence "approximately geodesic-aware".
 """
 from __future__ import annotations
 
@@ -120,41 +116,6 @@ def _cartesian_grid_from_arrays(
 def _cartesian_grid(ds: xr.Dataset) -> torch.Tensor:
     """Unit-sphere Cartesian embedding (N, 3) float32, from an xarray ds."""
     return _cartesian_grid_from_arrays(ds['y'].values, ds['x'].values)
-
-
-def _spherical_rff_coords_from_arrays(
-    lats_deg: np.ndarray,
-    lons_deg: np.ndarray,
-    num_features: int,
-    sigma: float,
-    seed: int,
-) -> torch.Tensor:
-    """SRFF coord tensor (N, 2·num_features) given arbitrary lat/lon arrays.
-    The ω draw is identical for any (lats, lons) given the same seed; only the
-    Cartesian projection points differ. This is what lets held-out eval reuse
-    the same encoding as training without storing ω explicitly."""
-    x_cart = _cartesian_grid_from_arrays(lats_deg, lons_deg)        # (N, 3)
-    
-    # Draw ω once with a reproducible generator. float32 throughout to avoid
-    # matmul dtype promotion downstream.
-    g = torch.Generator().manual_seed(int(seed))
-    omegas = torch.randn(num_features, 3, generator=g,
-                         dtype=torch.float32) * float(sigma)        # (m, 3)
-    proj = x_cart @ omegas.T                                        # (N, m)
-    return torch.cat([torch.cos(proj), torch.sin(proj)], dim=-1)    # (N, 2m)
-
-
-def _spherical_rff_coords(
-        ds: xr.Dataset,
-        num_features: int,
-        sigma: float,
-        seed: int
-    ) -> torch.Tensor:
-    """
-    SRFF coord tensor (N, 2·num_features), from an xarray ds.
-    """
-    return _spherical_rff_coords_from_arrays(ds['y'].values, ds['x'].values, num_features, sigma, seed)
-
 
 
 # ---------------------------------------------------------------------------
@@ -310,41 +271,6 @@ def spherical_harmonics_encoding(ds: xr.Dataset, L_max: int = 32):
     return coords, targets, target_min, target_max
 
 
-def spherical_rff_encoding(
-    ds: xr.Dataset,
-    num_features: int = 32,
-    sigma: float = 10.0,
-    seed: int = 42,
-):
-    """
-    Spherical Random Fourier Features (SRFF): apply RFF to Cartesian (x, y, z).
-
-    ω_i ~ N(0, σ² I₃) drawn ONCE at construction (seeded), then each sample
-    is encoded as
-
-        [cos(ω_1 · x), …, cos(ω_m · x), sin(ω_1 · x), …, sin(ω_m · x)]
-
-    Input dim = 2 · num_features. Defaults (num_features=32, sigma=10.0) match
-    INR-Bench's PE-RFF settings.
-    
-    Approximates a Gaussian kernel exp(-|x-x'|² / (2σ⁻²)) in R³, which on
-    the sphere is monotonically related to geodesic distance — hence
-    "approximately geodesic-aware".
-    """
-    if num_features <= 0:
-        raise ValueError(f"num_features must be > 0, got {num_features}.")
-    if sigma <= 0:
-        raise ValueError(f"sigma must be > 0, got {sigma}.")
-
-    coords = _spherical_rff_coords(ds,
-        num_features=num_features, sigma=sigma, seed=seed,
-    )
-
-    targets, target_min, target_max = _extract_targets(ds)
-    return coords, targets, target_min, target_max
-
-
-
 # ---------------------------------------------------------------------------
 # Array-based coord computation
 # ---------------------------------------------------------------------------
@@ -383,13 +309,6 @@ def compute_coords(
         sh = _sh_features(lats_deg, lons_deg, L_max)            # (H, W, (L+1)²)
         H, W, D = sh.shape
         return torch.from_numpy(sh.reshape(H * W, D))
-    if name == 'spherical-rff':
-        return _spherical_rff_coords_from_arrays(
-            lats_deg, lons_deg,
-            num_features=int(kwargs.get('num_features', 32)),
-            sigma=float(kwargs.get('sigma', 10.0)),
-            seed=int(kwargs.get('seed', 42)),
-        )
     raise ValueError(f"Unknown encoding '{name}'.")
 
 
@@ -405,9 +324,6 @@ def coord_encoding_dim(name: str, **kwargs) -> int:
     if name == 'spherical-harmonics':
         L_max = int(kwargs.get('L_max', 32))
         return (L_max + 1) ** 2
-    if name == 'spherical-rff':
-        m = int(kwargs.get('num_features', 32))
-        return 2 * m
     raise ValueError(f"Unknown encoding '{name}'.")
 
 

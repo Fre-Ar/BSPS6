@@ -69,16 +69,14 @@ def _baseline_hparams(**overrides) -> _HParams:
     base = dict(
         # identifiers
         dataset='etopo1', ce='angular', ce_resolved='angular',
-        arch='mlp', act='scaled-sine', mlp_act='scaled-sine',
-        kan_act='fourier', pe='None', seed=42,
+        act='scaled-sine', pe='None', seed=42,
         encoding_kwargs={},
         # hyperparameters
         lr=4e-4, batch_size=8192, num_epochs=1000,
         mlp_num_layers=6, mlp_layer_width=256,
-        kan_num_layers=6, kan_layer_width=64,
         sine_w0=30.0, gaussian_a=0.1,
-        ffn_scale=10.0, mapping_input=32,
-        sh_lmax=32, rff_num_features=32, rff_sigma=10.0, rff_seed=42,
+        ffn_scale=10.0, mapping_input=32, omega=32,
+        sh_lmax=32,
     )
     base.update(overrides)
     return _HParams(**base)
@@ -112,7 +110,7 @@ def test_append_row_writes_header_and_row() -> None:
         assert rows[0]['ce'] == 'angular'
         assert rows[0]['seed'] == '42'
         # Schema columns missing from `row` are written as empty strings.
-        assert rows[0]['arch'] == ''
+        assert rows[0]['act'] == ''
         print('  OK header + one row recovered.')
 
 
@@ -163,7 +161,6 @@ def test_logger_writes_completed_row_with_metrics() -> None:
         r = rows[0]
         assert r['status'] == 'completed'
         assert r['dataset'] == 'etopo1'
-        assert r['arch'] == 'mlp'
         assert r['act'] == 'scaled-sine'
         assert r['seed'] == '42'
         assert float(r['reconstruction_psnr']) == 35.5
@@ -302,9 +299,9 @@ def test_logger_encoding_kwargs_json() -> None:
         csv_path = os.path.join(tmp, 'runs.csv')
         cb = RunsCSVLogger(csv_path)
         hp = _baseline_hparams(
-            ce='spherical-rff',
-            ce_resolved='spherical-rff',
-            encoding_kwargs={'num_features': 32, 'sigma': 10.0, 'seed': 42},
+            ce='spherical-harmonics',
+            ce_resolved='spherical-harmonics',
+            encoding_kwargs={'L_max': 32},
         )
         mod = _StubModule(hp, num_params=1)
         tr = _StubTrainer(current_epoch=0)
@@ -312,10 +309,7 @@ def test_logger_encoding_kwargs_json() -> None:
         cb.on_train_end(tr, mod)
         r = _read_rows(csv_path)[0]
         parsed = json.loads(r['encoding_kwargs_json'])
-        assert parsed == {'num_features': 32, 'sigma': 10.0, 'seed': 42}
-        # sort_keys=True → keys in alphabetical order in the string.
-        assert r['encoding_kwargs_json'].index('num_features') < \
-               r['encoding_kwargs_json'].index('seed'), 'keys not sorted'
+        assert parsed == {'L_max': 32}
         print(f"  OK encoding_kwargs_json = {r['encoding_kwargs_json']}.")
 
 

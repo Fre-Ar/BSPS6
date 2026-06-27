@@ -23,7 +23,6 @@ from .coord_encodings import (
     angular_encoding,
     cartesian_encoding,
     spherical_harmonics_encoding,
-    spherical_rff_encoding,
     compute_coords,
 )
 
@@ -33,7 +32,6 @@ _CE_MAPPING = {
     'angular':             angular_encoding,
     'cartesian':           cartesian_encoding,
     'spherical-harmonics': spherical_harmonics_encoding,
-    'spherical-rff':       spherical_rff_encoding,
 }
 
 

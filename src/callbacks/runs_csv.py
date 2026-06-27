@@ -46,15 +46,13 @@ from pytorch_lightning.callbacks import Callback
 # Add new columns at the END and treat as a preregistration amendment.
 RUNS_CSV_SCHEMA: tuple[str, ...] = (
     # ---- Identifiers ----
-    'dataset', 'ce', 'arch', 'act', 'mlp_act', 'kan_act', 'pe', 'seed',
-    'encoding_kwargs_json',
+    'dataset', 'ce', 'act', 'pe', 'seed', 'encoding_kwargs_json',
     # ---- Hyperparameters ----
     'lr', 'batch_size', 'num_epochs',
     'mlp_num_layers', 'mlp_layer_width',
-    'kan_num_layers', 'kan_layer_width',
     'sine_w0', 'gaussian_a',
-    'ffn_scale', 'mapping_input',
-    'sh_lmax', 'rff_num_features', 'rff_sigma', 'rff_seed',
+    'ffn_scale', 'mapping_input', 'omega',
+    'sh_lmax',
     # ---- Reconstruction (training-pixel) metrics ----
     'reconstruction_psnr',
     'reconstruction_psnr_polar', 'reconstruction_psnr_equatorial',
@@ -185,10 +183,7 @@ class RunsCSVLogger(Callback):
             # ---- Identifiers ----
             'dataset':  getattr(h, 'dataset', ''),
             'ce':       getattr(h, 'ce_resolved', getattr(h, 'ce', '')),
-            'arch':     getattr(h, 'arch', ''),
             'act':      getattr(h, 'act', ''),
-            'mlp_act':  getattr(h, 'mlp_act', ''),
-            'kan_act':  getattr(h, 'kan_act', ''),
             'pe':       getattr(h, 'pe', ''),
             'seed':     int(getattr(h, 'seed', 42)),
             'encoding_kwargs_json': ce_kwargs_json,
@@ -198,16 +193,12 @@ class RunsCSVLogger(Callback):
             'num_epochs':    int(getattr(h, 'num_epochs', 0)),
             'mlp_num_layers':   int(getattr(h, 'mlp_num_layers', 0)),
             'mlp_layer_width':  int(getattr(h, 'mlp_layer_width', 0)),
-            'kan_num_layers':   int(getattr(h, 'kan_num_layers', 0)),
-            'kan_layer_width':  int(getattr(h, 'kan_layer_width', 0)),
             'sine_w0':       float(getattr(h, 'sine_w0', float('nan'))),
             'gaussian_a':    float(getattr(h, 'gaussian_a', float('nan'))),
             'ffn_scale':     float(getattr(h, 'ffn_scale', float('nan'))),
             'mapping_input': int(getattr(h, 'mapping_input', 0)),
+            'omega':         int(getattr(h, 'omega', 0)),
             'sh_lmax':       int(getattr(h, 'sh_lmax', 0)),
-            'rff_num_features': int(getattr(h, 'rff_num_features', 0)),
-            'rff_sigma':        float(getattr(h, 'rff_sigma', float('nan'))),
-            'rff_seed':         int(getattr(h, 'rff_seed', 0)),
             # ---- Reconstruction metrics ----
             'reconstruction_psnr':            _safe_metric(pl_module, 'reconstruction_psnr'),
             'reconstruction_psnr_polar':      _safe_metric(pl_module, 'reconstruction_psnr_polar'),

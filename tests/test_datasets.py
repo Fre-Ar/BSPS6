@@ -31,7 +31,6 @@ _ENCODING_KWARGS_FOR_TEST = {
     'angular':             {},
     'cartesian':           {},
     'spherical-harmonics': {'L_max': 8},     # (8+1)^2 = 81 features
-    'spherical-rff':       {'num_features': 32, 'sigma': 8.0, 'seed': 0},
 }
 
 
@@ -85,18 +84,6 @@ def _check_dataset_loader(dataset: str, encoding: str) -> None:
         norm_sq = float((sd.coords ** 2).sum(-1).mean())
         assert abs(norm_sq - 1.0) < 1e-4, \
             f'cartesian coords not on unit sphere (mean |r|^2 = {norm_sq})'
-
-    if encoding == 'spherical-rff':
-        m = kwargs['num_features']
-        cos_part = sd.coords[:, :m]
-        sin_part = sd.coords[:, m:]
-        # cos² + sin² = 1 for each frequency-pair, sample-wise.
-        unit_circle_err = (cos_part ** 2 + sin_part ** 2 - 1.0).abs().max().item()
-        assert unit_circle_err < 1e-5, (
-            f'spherical-rff: cos²+sin² should equal 1, got max err {unit_circle_err}'
-        )
-        assert float(cos_part.abs().max()) <= 1.0 + 1e-6
-        assert float(sin_part.abs().max()) <= 1.0 + 1e-6
 
     if encoding == 'spherical-harmonics':
         # Feature 0 is Y_0^0 = 1/sqrt(4π) — a literal constant across the sphere.

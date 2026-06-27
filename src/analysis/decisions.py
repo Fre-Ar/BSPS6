@@ -175,7 +175,7 @@ def evaluate_h1(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
     """
     polar_col = f'{metric}_polar'
     eq_col = f'{metric}_equatorial'
-    needed_cols = {polar_col, eq_col, 'arch', 'ce', 'pe', 'dataset', 'act'}
+    needed_cols = {polar_col, eq_col, 'ce', 'pe', 'dataset', 'act'}
     if missing := (needed_cols - set(df.columns)):
         return _missing_data_decision('H1', missing)
 
@@ -341,8 +341,8 @@ def evaluate_h3(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
       2. 95% bootstrap CI of the difference η²(pe) - η²(activation)
          excludes 0.
     """
-    if not {metric, 'arch', 'ce', 'pe', 'act', 'dataset'}.issubset(df.columns):
-        missing = {metric, 'arch', 'ce', 'pe', 'act', 'dataset'} - set(df.columns)
+    if not {metric, 'ce', 'pe', 'act', 'dataset'}.issubset(df.columns):
+        missing = {metric, 'ce', 'pe', 'act', 'dataset'} - set(df.columns)
         return _missing_data_decision('H3', missing)
     sub = _main_grid_cells(df)
     sub = sub.dropna(subset=[metric]).copy()

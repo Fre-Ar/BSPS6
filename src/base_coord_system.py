@@ -105,7 +105,7 @@ def run_main(system: BaseCoordSystem, hparams: Namespace):
     torch.set_float32_matmul_precision('high')
 
     logger = TensorBoardLogger(save_dir=hparams.save_dir,
-                               name=f"{hparams.kan_act}_{hparams.mlp_act}" if hparams.arch == "kamp" else hparams.act,
+                               name=hparams.act,
                                default_hp_metric=False)
 
     pbar = TQDMProgressBar(refresh_rate=1)

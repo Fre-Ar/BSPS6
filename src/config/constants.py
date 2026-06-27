@@ -38,7 +38,7 @@ TARGET = "target"
 # ---------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------
-CE_TYPES = Literal['angular', 'cartesian', 'spherical-harmonics', 'spherical-rff']
+CE_TYPES = Literal['angular', 'cartesian', 'spherical-harmonics']
 CE_CHOICES: tuple[CE_TYPES, ...] = get_args(CE_TYPES)
  
 DATASET_TYPES = Literal['etopo1', 'era5', 'cmb', 'hdri_sky', 'hdri_urban']

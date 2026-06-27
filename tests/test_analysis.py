@@ -67,10 +67,7 @@ def _mlp_row(act_key: str, pe_key: str, dataset: str, lmax: int | None,
     return {
         'dataset': dataset,
         'ce':      ce,
-        'arch':    'mlp',
         'act':     ACT_TO_FLAG[act_key],
-        'mlp_act': ACT_TO_FLAG[act_key],
-        'kan_act': '',           # n/a for MLP cells
         'pe':      pe,
         'seed':    42,
         'encoding_kwargs_json': json.dumps(ce_kwargs, sort_keys=True),
@@ -276,8 +273,7 @@ def test_empty_df_all_inconclusive() -> None:
     (never 'accepted', never a crash)."""
     print('\n[analysis] empty DataFrame ...')
     df = pd.DataFrame(columns=[
-        'dataset', 'ce', 'arch', 'act', 'mlp_act', 'kan_act', 'pe',
-        'status', 'held_out_psnr',
+        'dataset', 'ce', 'act', 'pe', 'status', 'held_out_psnr',
     ])
     for fn in (evaluate_h1, evaluate_h3, evaluate_h4,
                evaluate_h5a, evaluate_h5b):

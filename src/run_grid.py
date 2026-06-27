@@ -121,7 +121,7 @@ def cell_key_from_plan(cell: dict) -> tuple:
     cell_key_from_row(row) for the same logical cell.
 
     Tuple shape:
-      (dataset, ce, arch, act, mlp_act, kan_act, pe, seed, encoding_kwargs_json)
+      (dataset, ce, act, pe, seed, encoding_kwargs_json)
     """
     cfg = cell_config(cell['cell_key'])
     ce = cfg.get('ce', '')
@@ -137,12 +137,6 @@ def cell_key_from_plan(cell: dict) -> tuple:
 
     if ce == 'spherical-harmonics':
         ce_kwargs = {'L_max': int(extra_dict.get('sh_lmax', cfg.get('sh_lmax', 32)))}
-    elif ce == 'spherical-rff':
-        ce_kwargs = {
-            'num_features': int(extra_dict.get('rff_num_features', 32)),
-            'sigma':        float(extra_dict.get('rff_sigma', 10.0)),
-            'seed':         int(extra_dict.get('rff_seed', 42)),
-        }
     else:
         ce_kwargs = {}
 
@@ -150,10 +144,7 @@ def cell_key_from_plan(cell: dict) -> tuple:
     return (
         cell['dataset'],
         ce,
-        cfg.get('arch', ''),
         cfg.get('act', ''),
-        cfg.get('mlp_act', ''),
-        cfg.get('kan_act', ''),
         cfg.get('pe', ''),
         int(cell['seed']),
         ce_json,
@@ -165,10 +156,7 @@ def cell_key_from_row(row: dict) -> tuple:
     return (
         row.get('dataset', ''),
         row.get('ce', ''),
-        row.get('arch', ''),
         row.get('act', ''),
-        row.get('mlp_act', ''),
-        row.get('kan_act', ''),
         row.get('pe', ''),
         int(row.get('seed', 0) or 0),
         row.get('encoding_kwargs_json', '{}'),

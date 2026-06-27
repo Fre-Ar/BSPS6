@@ -37,8 +37,7 @@ from config.constants import DATASET_CHOICES                              # noqa
 # (The real `RUNS_CSV_SCHEMA` in callbacks/runs_csv.py is much larger but
 # requires torch via PL's Callback base class — keeping the test torch-free.)
 _TEST_CSV_COLUMNS = (
-    'dataset', 'ce', 'arch', 'act', 'mlp_act', 'kan_act',
-    'pe', 'seed', 'encoding_kwargs_json', 'status',
+    'dataset', 'ce', 'act', 'pe', 'seed', 'encoding_kwargs_json', 'status',
 )
 
 # Expected grid sizes, derived from the (activation × PE) cross product and
@@ -121,14 +120,11 @@ def test_full_grid_composes_subsets() -> None:
 def _row_from_plan(cell: dict) -> dict:
     """Synthetic CSV row matching what RunsCSVLogger would write for this cell."""
     key = run_grid.cell_key_from_plan(cell)
-    (_, ce, arch, act, mlp_act, kan_act, pe, seed, ce_json) = key
+    (_, ce, act, pe, seed, ce_json) = key
     return {
         'dataset': cell['dataset'],
         'ce':      ce,
-        'arch':    arch,
         'act':     act,
-        'mlp_act': mlp_act,
-        'kan_act': kan_act,
         'pe':      pe,
         'seed':    str(seed),
         'encoding_kwargs_json': ce_json,

@@ -1,24 +1,37 @@
-from typing import Optional, Tuple, Set
-import torch
+"""Minimal coordinate MLP used as the regressor in every benchmark cell.
+
+`num_layers` counts the Linear blocks. With the default outermost-linear
+convention used here, the structure is:
+  Linear(in → W) → act
+  Linear(W → W)  → act
+  ...
+  Linear(W → W)  → act    (num_layers - 1 hidden Linear+act blocks)
+  Linear(W → out)         (no activation after the last layer)
+
+For ScaledSine, the *first* layer uses the SIREN-style uniform-by-ω init
+(Sitzmann et al. 2020), and a separate first-layer activation with `sine_w0`
+is inserted if it differs from the hidden-layer `sine_w`.
+"""
+from typing import Optional
+
 from torch import Tensor, nn
-from ..normalization import norm_factory
+
 from .activations import activation_factory
 from .weight_init import weight_init_factory
 
 
 class CoordinateMLP(nn.Module):
-    def __init__(self,
-                 in_dim=1,
-                 out_dim=1,
-                 num_layers=6,
-                 layer_width=256,
-                 act='relu',
-                 act_trainable=False,
-                 outermost_linear=True,
-                 norm_type = 'none',
-                 skip_connections: Optional[Tuple[int]] = None,
-                 out_activation: Optional[nn.Module] = None,
-                 **kwargs):
+    def __init__(
+        self,
+        in_dim: int = 1,
+        out_dim: int = 1,
+        num_layers: int = 6,
+        layer_width: int = 256,
+        act: str = 'relu',
+        outermost_linear: bool = True,
+        out_activation: Optional[nn.Module] = None,
+        **kwargs,
+    ) -> None:
         super().__init__()
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -26,79 +39,50 @@ class CoordinateMLP(nn.Module):
         self.layer_width = layer_width
         self.out_activation = out_activation
         self.outermost_linear = outermost_linear
-        self.skip_connections = skip_connections
-        self._skip_connections: Set[int] = set(skip_connections) if skip_connections else set()
-        self.norm_type = norm_type
         self.act_type = act
-        self.act_trainable = act_trainable
-        self.tmp_skips = []
 
-        self.weight_init = weight_init_factory(self.act_type, **kwargs)
-        
-        # First layer init for Sine-type activation functions
-        self.first_sine_act = None
-        self.first_sine_layer_init = None
-        if(act == 'sine' or act == "scaled-sine"):
-            self.first_sine_layer_init = weight_init_factory(act='first-sine', **kwargs)
-            if kwargs['sine_w0'] != kwargs['sine_w']:
-                self.first_sine_act = activation_factory(act='first-sine', act_trainable=self.act_trainable, **kwargs)
-
-        layers = []
-        if self.num_layers == 1:
-            layers.append(nn.Linear(self.in_dim, self.out_dim))
+        weight_init = weight_init_factory(self.act_type, **kwargs)
+        # SIREN-style first-layer init for sine-family activations. If the
+        # first-layer ω differs from the hidden ω, insert a separate
+        # first-layer activation too.
+        first_sine_act: Optional[nn.Module] = None
+        first_sine_init = None
+        if act in ('sine', 'scaled-sine'):
+            first_sine_init = weight_init_factory('first-sine', **kwargs)
+            if kwargs.get('sine_w0') != kwargs.get('sine_w'):
+                first_sine_act = activation_factory('first-sine', **kwargs)
+                
+        layers: list[nn.Module] = []
+        if num_layers == 1:
+            layers.append(nn.Linear(in_dim, out_dim))
         else:
-            for i in range(self.num_layers - 1):
+            for i in range(num_layers - 1):
                 if i == 0:
-                    assert i not in self._skip_connections, "Skip connection at layer 0 doesn't make sense."
-                    layers.append(nn.Linear(self.in_dim, self.layer_width))
-                    if self.norm_type != 'none':
-                        layers.append(norm_factory(self.norm_type, self.layer_width))
-                    if self.first_sine_act is not None:
-                        layers.append(self.first_sine_act)
-                    else:
-                        layers.append(activation_factory(self.act_type, self.act_trainable, **kwargs))
-                elif i in self._skip_connections:
-                    layers.append(nn.Linear(self.layer_width + self.in_dim, self.layer_width))
-                    self.tmp_skips.append(len(layers)-1) # store skip layer index
-                    
-                    if self.norm_type != 'none':
-                        layers.append(norm_factory(self.norm_type, self.layer_width))
-                    layers.append(activation_factory(self.act_type, self.act_trainable, **kwargs))
+                    layers.append(nn.Linear(in_dim, layer_width))
+                    layers.append(
+                        first_sine_act if first_sine_act is not None
+                        else activation_factory(act, **kwargs)
+                    )
                 else:
-                    layers.append(nn.Linear(self.layer_width, self.layer_width))
-                    if self.norm_type != 'none':
-                        layers.append(norm_factory(self.norm_type, self.layer_width))
-                    layers.append(activation_factory(self.act_type, self.act_trainable, **kwargs))
-
-            layers.append(nn.Linear(self.layer_width, self.out_dim))
-
-        if not self.outermost_linear: # Output with activations
-            if self.out_activation is not None:
-                layers.append(self.out_activation)
-            else:
-                layers.append(activation_factory(self.act_type, self.act_trainable, **kwargs))
+                    layers.append(nn.Linear(layer_width, layer_width))
+                    layers.append(activation_factory(act, **kwargs))
+            layers.append(nn.Linear(layer_width, out_dim))
+            
+        if not outermost_linear:
+            layers.append(
+                out_activation if out_activation is not None
+                else activation_factory(act, **kwargs)
+            )
         
         self.layers = nn.ModuleList(layers)
+            
+        if weight_init is not None:
+            self.layers.apply(weight_init)
+        if first_sine_init is not None:
+            self.layers[0].apply(first_sine_init)
 
-        if self.weight_init is not None:
-            self.layers.apply(self.weight_init)
-
-        if self.first_sine_layer_init is not None: # Apply special initialization to first layer, if applicable.
-            self.layers[0].apply(self.first_sine_layer_init)
-
-    def forward(self, in_tensor):
-        """Process input with a multilayer perceptron.
-
-        Args:
-            in_tensor: Network input
-
-        Returns:
-            MLP network output
-        """
+    def forward(self, in_tensor: Tensor) -> Tensor:
         x = in_tensor
-        for i, layer in enumerate(self.layers):
-            # as checked in `build_nn_modules`, 0 should not be in `_skip_connections`
-            if i in self.tmp_skips:
-                x = torch.cat([in_tensor, x], -1)
+        for layer in self.layers:
             x = layer(x)
         return x
