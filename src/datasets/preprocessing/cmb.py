@@ -26,12 +26,33 @@ from __future__ import annotations
 import numpy as np
 import healpy as hp
 
-from .common import _standard_grid, save_standardized, sanity_check_standardized
+from .common import (
+    _standard_grid, _held_out_grid,
+    save_standardized, sanity_check_standardized,
+)
+
+
+def _interp_cmb_to_grid(hp, cmb_I, new_lats, new_lons, label):
+    """Bilinearly interpolate the HEALPix CMB map at the given lat/lon grid.
+    Returns a (len(new_lats), len(new_lons)) float32 array."""
+    grid_lat, grid_lon = np.meshgrid(new_lats, new_lons, indexing='ij')
+    theta = np.deg2rad(90.0 - grid_lat)        # colatitude in [0, pi]
+    phi   = np.deg2rad(grid_lon % 360.0)       # longitude in [0, 2pi)
+    print(f"[CMB] {label}: interpolating to "
+          f"{len(new_lats)}x{len(new_lons)} equirectangular grid ...")
+    values = hp.get_interp_val(cmb_I, theta.ravel(), phi.ravel(), nest=False)
+    signal = values.reshape(len(new_lats), len(new_lons)).astype(np.float32)
+    n_nan = int(np.isnan(signal).sum())
+    if n_nan:
+        print(f"[CMB] {label}: warning: {n_nan} NaN pixels; filling with mean")
+        signal = np.where(np.isnan(signal), np.nanmean(signal), signal)
+    return signal
 
 
 def preprocess_cmb(
     input_filepath: str,
     output_filepath: str,
+    held_out_filepath: str | None = None,
     n_lat: int = 512,
     n_lon: int = 1024,
     intermediate_nside: int | None = 512,
@@ -62,24 +83,18 @@ def preprocess_cmb(
         print(f"[CMB] ud_grade to Nside={intermediate_nside}")
         cmb_I = hp.ud_grade(cmb_I, nside_out=intermediate_nside, order_in='RING')
 
-    # Build target lat/lon grid (degrees -> radians conversion for healpy).
+    # Source-derived normalization reference.
+    # Computed on the HEALPix map *after* any ud_grade, before equirect
+    # projection, so both training and held-out equirect samples normalize
+    # to a single shared scale.
+    target_min = np.array([float(np.nanmin(cmb_I))], dtype=np.float32)
+    target_max = np.array([float(np.nanmax(cmb_I))], dtype=np.float32)
+    print(f"[CMB] source signal in [{target_min[0]:.4g}, {target_max[0]:.4g}]")
+
+
+    # ---- 1. Standard training grid ----
     new_lats, new_lons = _standard_grid(n_lat, n_lon)
-    grid_lat, grid_lon = np.meshgrid(new_lats, new_lons, indexing='ij')  # (H, W) each
-
-    # healpy uses (theta, phi) in radians. theta = colatitude in [0, pi] (north
-    # pole -> 0), phi = longitude in [0, 2*pi).
-    theta = np.deg2rad(90.0 - grid_lat)   # colatitude
-    phi   = np.deg2rad(grid_lon % 360.0)  # longitude in [0, 2pi)
-
-    print(f"[CMB] interpolating to {n_lat}x{n_lon} equirectangular grid ...")
-    values = hp.get_interp_val(cmb_I, theta.ravel(), phi.ravel(), nest=False)
-    signal = values.reshape(n_lat, n_lon).astype(np.float32)
-
-    # Any residual NaN (shouldn't happen for full-sky SMICA, but be safe):
-    n_nan = int(np.isnan(signal).sum())
-    if n_nan:
-        print(f"[CMB] warning: {n_nan} NaN pixels after interp; filling with mean")
-        signal = np.where(np.isnan(signal), np.nanmean(signal), signal)
+    signal = _interp_cmb_to_grid(hp, cmb_I, new_lats, new_lons, label='train')
 
     save_standardized(
         output_filepath,
@@ -95,9 +110,40 @@ def preprocess_cmb(
                 f'read Stokes I from FITS, ud_grade to Nside={intermediate_nside}, '
                 f'bilinear HEALPix->equirect interp on {n_lat}x{n_lon}'
             ),
+            'grid_role': 'train',
         },
+        target_min=target_min,
+        target_max=target_max,
     )
     sanity_check_standardized(output_filepath)
-    print(f"[CMB] wrote {output_filepath}")
+    print(f"[CMB] wrote training file {output_filepath}")
+    
+    # ---- 2. Half-pixel-offset held-out grid (from same HEALPix source) ----
+    if held_out_filepath:
+        held_lats, held_lons = _held_out_grid(n_lat, n_lon)
+        signal_held = _interp_cmb_to_grid(hp, cmb_I, held_lats, held_lons,
+                                          label='held_out')
+        save_standardized(
+            held_out_filepath,
+            lats_deg=held_lats,
+            lons_deg=held_lons,
+            signal=signal_held,
+            extra_attrs={
+                'source': 'Planck 2018 SMICA Full-mission CMB I-Stokes (ESA PLA)',
+                'units': 'K_CMB (Kelvin, CMB thermodynamic temperature)',
+                'native_nside': str(native_nside),
+                'intermediate_nside': str(intermediate_nside),
+                'preprocess': (
+                    f'bilinear HEALPix->equirect interp on {n_lat-1}x{n_lon-1} '
+                    f'half-pixel-offset grid from SOURCE HEALPix'
+                ),
+                'grid_role': 'held_out',
+                'train_shape': f'{n_lat}x{n_lon}',
+            },
+            target_min=target_min,
+            target_max=target_max,
+        )
+        sanity_check_standardized(held_out_filepath)
+        print(f"[CMB] wrote held-out file {held_out_filepath}")
 
 

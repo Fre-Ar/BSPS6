@@ -1,22 +1,18 @@
-"""The locked grid of (activation × positional-encoding) Coordinate-MLP cells
-plus the standalone Fourier Coordinate-KAN row.
+"""The locked grid of (activation × positional-encoding) Coordinate-MLP cells.
 
-This file replaces the previous (architecture × coordinate-encoding) grid.
-The new structure mirrors INR-Bench's own factor decomposition for Coordinate
-models (Li et al. 2025, Table III): for the MLP family, the design dimensions
-are *activation function* and *positional encoding*; Coordinate-KANs are
-reported as a separate row family without positional encoding.
+The benchmark is a 2-dimensional factorization over Coordinate-MLPs, mirroring
+INR-Bench's (Li et al. 2025, Table III) own decomposition. The two design
+dimensions are:
 
-Concretely, this benchmark uses
-  * 3 activations: ReLU, ScaledSine, Gaussian
-  * 5 PE cells:    None+angular, None+cartesian, RFF, SH, FKAN
-  * 1 KAN row:     Fourier Coordinate-KAN (no PE)
-giving 3 × 5 + 1 = 16 cells per dataset.
+  * activation function: ReLU, ScaledSine, Gaussian.
+  * positional encoding: Identity on angular coordinates, Identity on
+    Cartesian coordinates, RFF, Spherical Harmonics, FKAN.
 
-Each cell exposes:
-  * a unique `cell_key` (the canonical run identifier in runs.csv);
-  * a list of CLI flag overrides for `src/main.py`;
-  * a human-readable display name for plots/reports;
+Crossing them gives every cell in the grid. Each cell exposes:
+
+  * a unique `cell_key` (the canonical run identifier in runs.csv),
+  * a list of CLI flag overrides for `src/main.py`,
+  * a human-readable display name for plots and reports,
   * an INR-Bench Table III baseline number where directly comparable.
 """
 from __future__ import annotations
@@ -24,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 
-# ----- Common MLP shape (shared across all 15 MLP cells) --------------------
+# ----- Common MLP shape (shared across all cells) ---------------------------
 # Matches INR-Bench Coordinate-MLP defaults (Appendix "Network Settings":
 # 6-layer MLP, hidden width 256).
 _MLP_SHAPE: dict[str, Any] = {
@@ -34,7 +30,7 @@ _MLP_SHAPE: dict[str, Any] = {
 }
 
 
-# ----- Activations (n = 3) --------------------------------------------------
+# ----- Activations ----------------------------------------------------------
 # Names are taken from INR-Bench Table III rows. Values not specified by
 # INR-Bench (e.g. trainable-scale defaults for ScaledSine) follow our
 # opts.py defaults.
@@ -54,7 +50,7 @@ ACTIVATIONS: dict[str, dict[str, Any]] = {
 }
 
 
-# ----- PE cells (n = 5) -----------------------------------------------------
+# ----- PE cells -------------------------------------------------------------
 # Each PE cell pins (ce, pe, encoding hyperparams). The first two cells
 # (`none_angular` and `none_cartesian`) play the role of INR-Bench's
 # "Identity" PE row on the sphere — they feed raw coordinates to the MLP,
@@ -87,36 +83,16 @@ PE_CELLS: dict[str, dict[str, Any]] = {
         'pe':      'None',
         'sh_lmax': 32,           # PE output dim (L_max+1)^2 = 1089.
     },
-    # FKAN PE — faithful implementation (single Fourier feature map with
-    # trainable a, b per (d, ω), Ω = 1024). Applied to Cartesian inputs
-    # (D = 3 → PE output 2 · 3 · 1024 = 6144).
-    # INR-Bench Appendix: "For FKAN positional encoding, the maximum
-    # frequency threshold Ω is set to 1024."
+    # FKAN PE — single Fourier feature mapping with trainable per-(d, ω)
+    # coefficients (a_{iω}, b_{iω}); see INR-Bench Eq. 6/7 and
+    # `src/models/encodings/fkan_encoding.py`. Applied to Cartesian inputs
+    # (D = 3). Ω is matched to the spectral reach of SH (L_max = 32) and
+    # RFF (L = 32) so the three frequency-aware PEs share one scale — see
+    # preregistration §3.3 "On FKAN Ω".
     'fkan': {
         'ce':    'cartesian',
         'pe':    'FKAN',
-        'omega': 32,
-    },
-}
-
-
-# ----- Standalone Fourier Coordinate-KAN row --------------------------------
-# INR-Bench Coordinate-KANs are evaluated without an additional positional
-# encoding. Layer count and width match
-# INR-Bench Appendix: "All Coordinate-KANs are 6-layer KAN networks with a
-# width of 64." Fed Cartesian (x, y, z) so the KAN basis isn't asked to
-# absorb angular coordinate singularities.
-KAN_ROW: dict[str, dict[str, Any]] = {
-    'fourier_kan': {
-        'arch':             'kan',
-        'act':              'fourier',
-        'ce':               'cartesian',
-        'pe':               'None',
-        'kan_num_layers':   6,
-        'kan_layer_width':  64,
-        'input_grid_size':  8,
-        'hidden_grid_size': 8,
-        'output_grid_size': 8,
+        'omega': 32,            # PE output dim 2 · D · Ω = 192.
     },
 }
 
@@ -125,7 +101,8 @@ KAN_ROW: dict[str, dict[str, Any]] = {
 # Image Regression column of Table III (Li et al. 2025), where directly
 # comparable. Soft references for pilot sanity-checks only — Euclidean
 # 2D image regression is not strictly identical to spherical regression,
-# so we do NOT use these as pass/fail targets.
+# so we do NOT use these as pass/fail targets. Filled where the value has
+# been cross-referenced against the paper; the rest left as None.
 INR_BENCH_BASELINES: dict[str, float | None] = {
     # ReLU row
     'relu__none_angular':     None,
@@ -145,8 +122,6 @@ INR_BENCH_BASELINES: dict[str, float | None] = {
     'gaussian__rff':            None,
     'gaussian__sh':             None,
     'gaussian__fkan':           34.70,  # Gaussian + FKAN, Table III.
-    # KAN row
-    'fourier_kan':              33.56,  # Fourier Coordinate-KAN, Table III.
 }
 
 # ----- Display names --------------------------------------------------------
@@ -166,8 +141,6 @@ _PE_DISPLAY = {
 
 def display_name(cell_key: str) -> str:
     """Human-readable name for plots / reports."""
-    if cell_key in KAN_ROW:
-        return 'Fourier KAN'
     act_key, pe_key = cell_key.split('__')
     return f'{_ACT_DISPLAY[act_key]} + {_PE_DISPLAY[pe_key]}'
 
@@ -175,35 +148,21 @@ def display_name(cell_key: str) -> str:
 
 # ----- Public helpers -------------------------------------------------------
 def cell_keys() -> tuple[str, ...]:
-    """The canonical iteration order for the 16 cells.
-
-    Order: all MLP cells (activation outer, PE inner), then the KAN row.
-    """
-    mlp_keys = [
+    """The canonical iteration order: activation outer, PE inner."""
+    return tuple(
         f'{act_key}__{pe_key}'
         for act_key in ACTIVATIONS
         for pe_key in PE_CELLS
-    ]
-    return tuple(mlp_keys + list(KAN_ROW.keys()))
-
-
-def is_kan_cell(cell_key: str) -> bool:
-    """True if the cell is the standalone Coordinate-KAN row."""
-    return cell_key in KAN_ROW
-
+    )
 
 def cell_config(cell_key: str) -> dict[str, Any]:
     """Return the merged flag-override dict for `cell_key`.
 
-    For MLP cells this is `_MLP_SHAPE ∪ ACTIVATIONS[act] ∪ PE_CELLS[pe]`;
-    for the KAN row it is `KAN_ROW[cell_key]` directly.
+    Composed as `_MLP_SHAPE ∪ ACTIVATIONS[act] ∪ PE_CELLS[pe]`.
     """
-    if cell_key in KAN_ROW:
-        return dict(KAN_ROW[cell_key])
     if '__' not in cell_key:
         raise ValueError(
-            f"Unknown cell_key '{cell_key}'. "
-            f"Available: {list(cell_keys())}"
+            f"Unknown cell_key '{cell_key}'. Available: {list(cell_keys())}"
         )
     act_key, pe_key = cell_key.split('__', 1)
     if act_key not in ACTIVATIONS:
@@ -237,19 +196,7 @@ def inr_bench_baseline(cell_key: str) -> float | None:
     return INR_BENCH_BASELINES.get(cell_key)
 
 
-# ----- Backward-compat shims ------------------------------------------------
-# Older code paths (and tests) referenced the previous ARCHITECTURES /
-# architecture_keys / architecture_cli_args names. They now resolve to the
-# new cell terminology so we don't have to flush every import site at once.
+# Derived constants (handy for tests and reports — they always stay in sync
+# with cell_keys() and cell_config()).
 ARCHITECTURES = {k: cell_config(k) for k in cell_keys()}
 DISPLAY_NAMES = {k: display_name(k) for k in cell_keys()}
-
-
-def architecture_keys() -> tuple[str, ...]:
-    """Alias for `cell_keys()` (preserves the old import surface)."""
-    return cell_keys()
-
-
-def architecture_cli_args(cell_key: str) -> list[str]:
-    """Alias for `cell_cli_args(cell_key)` (preserves the old import surface)."""
-    return cell_cli_args(cell_key)

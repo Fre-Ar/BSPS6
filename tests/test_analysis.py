@@ -5,10 +5,9 @@ the decisions match expectations (preregistration §6: "analysis script
 is written and committed BEFORE runs begin, against synthetic placeholder
 data with the expected schema").
 
-Post-redesign factor structure (preregistration §3.2 / §3.3):
-  * 3 activations × 5 PE cells = 15 Coordinate-MLP cells
-  * 1 Fourier KAN row (reported separately; excluded from H1/H3/H4)
-  * 5 datasets, 1 seed → 80 main-grid runs + 6 H5a + 9 H5b = 95 total
+Factor structure:
+  * activations × PE cells = Coordinate-MLP cells in the main grid
+  * 5 datasets, 1 seed → main-grid runs + 6 H5a + 9 H5b sub-grids
 
 We generate two synthetic worlds:
   * 'happy' — every hypothesis should accept.
@@ -39,7 +38,7 @@ from analysis.decisions import (                                          # noqa
     HIGH_BANDWIDTH_DATASETS,
 )
 from analysis.run_analysis import apply_holm_bonferroni                   # noqa: E402
-from config.architectures import ACTIVATIONS, PE_CELLS, KAN_ROW           # noqa: E402
+from config.architectures import ACTIVATIONS, PE_CELLS                    # noqa: E402
 
 DATASETS = tuple(DATASET_METRICS.keys())
 
@@ -80,28 +79,6 @@ def _mlp_row(act_key: str, pe_key: str, dataset: str, lmax: int | None,
         'held_out_psnr_polar':      polar,
         'held_out_psnr_equatorial': equatorial,
     }
-
-
-def _kan_row(dataset: str, psnr: float, polar: float, equatorial: float,
-             status: str = 'completed') -> dict:
-    """Synthetic CSV row for the standalone Fourier KAN cell."""
-    cfg = KAN_ROW['fourier_kan']
-    return {
-        'dataset': dataset,
-        'ce':      cfg['ce'],
-        'arch':    cfg['arch'],
-        'act':     cfg['act'],
-        'mlp_act': '',
-        'kan_act': cfg['act'],
-        'pe':      cfg['pe'],
-        'seed':    42,
-        'encoding_kwargs_json': '{}',
-        'status':  status,
-        'held_out_psnr':            psnr,
-        'held_out_psnr_polar':      polar,
-        'held_out_psnr_equatorial': equatorial,
-    }
-
 
 def generate_happy_runs(seed: int = 0) -> pd.DataFrame:
     """A synthetic runs.csv where every hypothesis SHOULD accept.
@@ -148,7 +125,7 @@ def generate_happy_runs(seed: int = 0) -> pd.DataFrame:
 
     rows: list[dict] = []
 
-    # ---- Main-grid MLP cells (3 activations × 5 PEs × 5 datasets = 75) ----
+    # ---- Main-grid cells (activations × PEs × datasets) ----
     for act_key in ACTIVATIONS:
         for pe_key in PE_CELLS:
             for dataset in DATASETS:
@@ -161,15 +138,8 @@ def generate_happy_runs(seed: int = 0) -> pd.DataFrame:
                 lmax = SH_LMAX_DEFAULT if pe_key == 'sh' else None
                 rows.append(_mlp_row(act_key, pe_key, dataset, lmax,
                                      psnr, polar, equatorial))
-
-    # ---- KAN row (5 datasets) ----
-    for dataset in DATASETS:
-        psnr = dataset_psnr(dataset) + 1.0 + rng.normal(0, 0.1)
-        polar = psnr - 0.5
-        equatorial = psnr + 0.5
-        rows.append(_kan_row(dataset, psnr, polar, equatorial))
-
-    # ---- H5a: matched L_max for low-bandwidth datasets, 3 acts × 2 ds = 6 ----
+                
+    # ---- H5a: matched L_max for low-bandwidth datasets ----
     for act_key in ACTIVATIONS:
         for dataset, lmax_matched in SH_LMAX_H5A.items():
             base = (dataset_psnr(dataset)
@@ -181,7 +151,7 @@ def generate_happy_runs(seed: int = 0) -> pd.DataFrame:
             rows.append(_mlp_row(act_key, 'sh', dataset, lmax_matched,
                                  psnr, polar, equatorial))
 
-    # ---- H5b: L_max=16 on high-bandwidth datasets, 3 acts × 3 ds = 9 ----
+    # ---- H5b: L_max=16 on high-bandwidth datasets ----
     for act_key in ACTIVATIONS:
         for dataset in HIGH_BANDWIDTH_DATASETS:
             base = (dataset_psnr(dataset)
@@ -208,9 +178,6 @@ def generate_null_runs(seed: int = 0) -> pd.DataFrame:
                 lmax = SH_LMAX_DEFAULT if pe_key == 'sh' else None
                 rows.append(_mlp_row(act_key, pe_key, dataset, lmax,
                                      psnr, psnr, psnr))
-    for dataset in DATASETS:
-        psnr = 30.0 + rng.normal(0, 1.0)
-        rows.append(_kan_row(dataset, psnr, psnr, psnr))
 
     for act_key in ACTIVATIONS:
         for dataset, lmax in SH_LMAX_H5A.items():

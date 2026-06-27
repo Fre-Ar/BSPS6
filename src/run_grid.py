@@ -6,24 +6,19 @@ Usage from repo root:
                                [--retry_all] [--max_runs N] [--seed 42]
 
 The launcher:
-  1. Builds the grid from the locked (activation × PE) cells + the KAN row
-     defined in src/config/architectures.py, crossed with the 5 datasets in
+  1. Builds the grid from the locked (activation × PE) cells defined in
+     src/config/architectures.py, crossed with the 5 datasets in
      src/config/constants.py.
   2. Reads runs.csv to find cells with status='completed'.
   3. Skips completed cells (unless --retry_all is passed).
   4. Runs the remaining cells sequentially via subprocess to `src/main.py`.
 
-The grid is 100 runs at 1 seed:
-  * Main grid: 4 archs × 4 encodings × 5 datasets × 1 seed                = 80
-  * H5a:       SH at ⌈L_95⌉ for ERA5 (L_max=13) and HDRI_sky (L_max=31)   =  8
-  * H5b:       SH at L_max=16 for ETOPO1, HDRI_urban, CMB                 = 12
-  
-The grid is 95 runs at 1 seed:
-  * Main grid: 16 cells × 5 datasets × 1 seed                              = 80
-  * H5a: SH at ⌈L_95⌉ for ERA5 (L_max=13) and HDRI_sky (L_max=31),
-         applied to each of the 3 MLP-SH cells (one per activation)        =  6
-  * H5b: SH at L_max=16 for the 3 high-bandwidth datasets
-         (ETOPO1, HDRI_urban, CMB), applied to each of the 3 MLP-SH cells  =  9
+The grid is 90 runs at 1 seed:
+  * Main grid: every (activation × PE) cell × every dataset                     = 75
+  * H5a sub-grid: SH at ⌈L_95⌉ for each low-bandwidth dataset
+                  (ERA5: L_max=13, HDRI_sky: L_max=31), one cell per activation =  6
+  * H5b sub-grid: SH at L_max=16 for each high-bandwidth dataset
+                  (ETOPO1, HDRI_urban, CMB), one cell per activation            =  9
 
 
 Resume policy: a cell's row in runs.csv with status='completed' will cause
@@ -43,16 +38,15 @@ import time
 from pathlib import Path
 
 from config.architectures import (                                          # noqa: E402
-    ACTIVATIONS, cell_keys, cell_config, cell_cli_args, is_kan_cell,
+    ACTIVATIONS, cell_keys, cell_config, cell_cli_args
 )
 from config.constants import DATASET_CHOICES                     # noqa: E402
 
 
 # ----- H5a / H5b specifications (preregistration §3.5) ---------------------
-# The SH MLP cells (one per activation). H5a/H5b are SH-bandwidth ablations,
-# so they only re-run the cells that *use* SH — the KAN row and the other
-# four PE cells are unaffected.
-SH_MLP_CELL_KEYS: tuple[str, ...] = tuple(
+# The SH cells (one per activation). H5a/H5b are SH-bandwidth ablations, so
+# they only re-run the cells that *use* SH — the other PE cells are unaffected.
+SH_CELL_KEYS: tuple[str, ...] = tuple(
     f'{act_key}__sh' for act_key in ACTIVATIONS
 )
 
@@ -74,7 +68,7 @@ H5B_LMAX = 16
 # Grid construction
 # ---------------------------------------------------------------------------
 def build_main_grid(seed: int) -> list[dict]:
-    """The 80 main-grid cells: 16 cells × 5 datasets × 1 seed.
+    """Main grid: every cell × every dataset, all at the given seed.
     Encoding kwargs use the opts.py defaults."""
     cells: list[dict] = []
     for cell_key in cell_keys():
@@ -90,9 +84,10 @@ def build_main_grid(seed: int) -> list[dict]:
 
 
 def build_h5a_grid(seed: int) -> list[dict]:
-    """6 H5a cells: 3 SH-MLP cells × 2 datasets × 1 matched-L_max per dataset."""
+    """H5a sub-grid: every SH cell × every low-bandwidth dataset, at the
+    dataset's matched L_max = ⌈L_95⌉."""
     cells: list[dict] = []
-    for cell_key in SH_MLP_CELL_KEYS:
+    for cell_key in SH_CELL_KEYS:
         for run in H5A_RUNS:
             cells.append({
                 'cell_key': cell_key,
@@ -105,9 +100,9 @@ def build_h5a_grid(seed: int) -> list[dict]:
 
 
 def build_h5b_grid(seed: int) -> list[dict]:
-    """9 H5b cells: 3 SH-MLP cells × 3 high-bandwidth datasets × L_max=16."""
+    """H5b sub-grid: every SH cell × every high-bandwidth dataset, at L_max=16."""
     cells: list[dict] = []
-    for cell_key in SH_MLP_CELL_KEYS:
+    for cell_key in SH_CELL_KEYS:
         for dataset in H5B_DATASETS:
             cells.append({
                 'cell_key': cell_key,

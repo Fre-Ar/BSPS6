@@ -16,7 +16,7 @@ import numpy as np
 import xarray as xr
 
 
-def _standard_grid(n_lat: int, n_lon: int) -> tuple[np.ndarray, np.ndarray]:
+def _standard_grid(n_lat: int = 512, n_lon: int = 1024) -> tuple[np.ndarray, np.ndarray]:
     """
     Build the canonical equirectangular grid.
 
@@ -28,12 +28,39 @@ def _standard_grid(n_lat: int, n_lon: int) -> tuple[np.ndarray, np.ndarray]:
     lons = np.linspace(-180.0, 180.0, n_lon, endpoint=False, dtype=np.float32)
     return lats, lons
 
+
+def _held_out_grid(n_lat: int = 512, n_lon: int = 1024) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build the half-pixel-offset evaluation grid relative to the standard
+    (n_lat, n_lon) training grid produced by `_standard_grid`.
+
+    Returns lats of length (n_lat - 1) and lons of length (n_lon - 1). Each
+    held-out coord sits midway between two adjacent training coords, so the
+    held-out positions are disjoint from every training pixel center while
+    remaining strictly inside the spatial extent of the source.
+
+    For the default (512, 1024) training shape this is the 511 × 1023 grid
+    used for held-out PSNR (preregistration §3.4).
+
+    By preregistration §3.4 (v0.4), ground-truth values at these coords must
+    be sampled from the original source dataset, NOT from the down-sampled
+    512 × 1024 training file. Each preprocessor produces a second NetCDF at
+    this grid; `SphericalDataset.make_held_out_eval()` loads it directly.
+    """
+    lats, lons = _standard_grid(n_lat, n_lon)
+    lats_held = 0.5 * (lats[:-1] + lats[1:])
+    lons_held = 0.5 * (lons[:-1] + lons[1:])
+    return lats_held.astype(np.float32), lons_held.astype(np.float32)
+
+
 def save_standardized(
     out_path: str,
     lats_deg: np.ndarray,
     lons_deg: np.ndarray,
     signal: np.ndarray,
     extra_attrs: Optional[dict] = None,
+    target_min: Optional[np.ndarray] = None,
+    target_max: Optional[np.ndarray] = None,
 ) -> None:
     """
     Persist a signal to disk as a standardized NetCDF.
@@ -47,7 +74,15 @@ def save_standardized(
     signal   : (H, W) scalar or (H, W, 3) RGB array (float32 recommended).
     extra_attrs : optional dict of metadata attached to ds.attrs (source,
         timestamp, tone-mapping params, etc.).
+    target_min, target_max : optional per-channel arrays (length C) holding
+        the source-derived normalization reference. Both training and held-out
+        files for a given dataset should carry the SAME values, computed once
+        from the base source before any spatial sub-sampling. Stored as JSON
+        in the NetCDF attrs and consumed by SphericalDataset so that
+        normalized targets land in [-1, 1] for every sub-sample.
     """
+    import json
+    
     signal = np.asarray(signal, dtype=np.float32)
     H, W = len(lats_deg), len(lons_deg)
 
@@ -63,6 +98,7 @@ def save_standardized(
             coords={'y': lats_deg.astype(np.float32),
                     'x': lons_deg.astype(np.float32)},
         )
+        n_channels = 1
     elif signal.ndim == 3 and signal.shape[2] == 3:
         ds = xr.Dataset(
             data_vars={'z': (('y', 'x', 'c'), signal)},
@@ -70,6 +106,7 @@ def save_standardized(
                     'x': lons_deg.astype(np.float32),
                     'c': np.array([0, 1, 2], dtype=np.int32)},
         )
+        n_channels = 3
     else:
         raise ValueError(
             f"Unsupported signal shape {signal.shape}; expected (H,W) or (H,W,3)."
@@ -77,6 +114,21 @@ def save_standardized(
 
     if extra_attrs:
         ds.attrs.update({k: str(v) for k, v in extra_attrs.items()})
+        
+    if target_min is not None and target_max is not None:
+        tmin = np.atleast_1d(np.asarray(target_min, dtype=np.float64))
+        tmax = np.atleast_1d(np.asarray(target_max, dtype=np.float64))
+        if tmin.shape != (n_channels,) or tmax.shape != (n_channels,):
+            raise ValueError(
+                f"target_min/target_max shape {tmin.shape}/{tmax.shape} "
+                f"does not match signal channels ({n_channels})."
+            )
+        if np.any(tmax <= tmin):
+            raise ValueError(
+                f"target_max ({tmax}) must be > target_min ({tmin}) per channel."
+            )
+        ds.attrs['target_min_json'] = json.dumps([float(x) for x in tmin])
+        ds.attrs['target_max_json'] = json.dumps([float(x) for x in tmax])
 
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     # Small engine-agnostic encoding: fall back to default if netCDF4 unavailable.

@@ -45,9 +45,20 @@ import xarray as xr
 
 def _extract_targets(ds: xr.Dataset) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Flatten ds['z'] to (N, C), compute per-channel min/max, return
-    (targets_normalized_in_[-1,1], target_min, target_max).
+    Flatten ds['z'] to (N, C), normalize per-channel to [-1, 1], return
+    (targets_normalized, target_min, target_max).
+
+    Normalization reference: if the NetCDF carries `target_min_json` /
+    `target_max_json` attrs (written by the preprocessors from the BASE
+    source's per-channel extremes), those are used. This guarantees the
+    training and the held-out file for the same dataset normalize on the
+    same scale, so both sub-samples land in [-1, 1] even if one of them
+    captures source extremes the other misses. Falls back to the per-sample
+    min/max if the attrs are absent (backward compat with files preprocessed
+    before the attrs were introduced).
     """
+    import json
+
     z = np.asarray(ds['z'].values, dtype=np.float32)
     if z.ndim == 2:
         z = z[..., None]   # (H, W, 1)
@@ -57,8 +68,21 @@ def _extract_targets(ds: xr.Dataset) -> tuple[torch.Tensor, torch.Tensor, torch.
     H, W = z.shape[:2]
 
     target = torch.from_numpy(z.reshape(H * W, C))                     # (N, C)
-    target_min = target.amin(dim=0)                                    # (C,)
-    target_max = target.amax(dim=0)                                    # (C,)
+
+    tmin_attr = ds.attrs.get('target_min_json')
+    tmax_attr = ds.attrs.get('target_max_json')
+    if tmin_attr is not None and tmax_attr is not None:
+        target_min = torch.tensor(json.loads(tmin_attr), dtype=torch.float32)
+        target_max = torch.tensor(json.loads(tmax_attr), dtype=torch.float32)
+        if target_min.shape != (C,) or target_max.shape != (C,):
+            raise ValueError(
+                f"target_min/max attrs have shape {tuple(target_min.shape)} / "
+                f"{tuple(target_max.shape)}, but the signal has {C} channels."
+            )
+    else:
+        target_min = target.amin(dim=0)                                # (C,)
+        target_max = target.amax(dim=0)                                # (C,)
+
     denom = (target_max - target_min).clamp(min=1e-8)
     targets = 2.0 * ((target - target_min) / denom) - 1.0              # (N, C)
     return targets, target_min, target_max

@@ -58,6 +58,7 @@ class SphericalDataset(Dataset):
         grd_file_path: str,
         coordinate_encoding: CE_TYPES = 'angular',
         encoding_kwargs: Optional[dict] = None,
+        held_out_file_path: Optional[str] = None,
     ):
         ds = xr.open_dataset(grd_file_path)
         encoding_kwargs = dict(encoding_kwargs or {})
@@ -79,6 +80,7 @@ class SphericalDataset(Dataset):
         self.lons_deg: np.ndarray = np.asarray(ds['x'].values)
         
         self.file_path: str = grd_file_path
+        self.held_out_file_path: Optional[str] = held_out_file_path
         self.coordinate_encoding: str = coordinate_encoding
         self.encoding_kwargs: dict = encoding_kwargs
         
@@ -98,34 +100,58 @@ class SphericalDataset(Dataset):
     def make_held_out_eval(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Build (coords, targets) for the (H-1)×(W-1) half-pixel-offset grid.
 
-        Coords use the same coordinate encoding and the same kwargs (including
-        SRFF seed) as the training data, so the held-out coords inhabit the
-        identical feature space the model trained on — only the spatial
-        positions differ.
+        Per preregistration §3.4 (v0.4), ground-truth values at the offset
+        positions are read directly from a SEPARATELY preprocessed
+        `*_511x1023_held_out.nc` file (path supplied via
+        `held_out_file_path` at construction). That file is produced by the
+        per-dataset preprocessor by interpolating the BASE SOURCE onto the
+        511×1023 grid — never from the 512×1024 training file. The
+        training-grid bilinear interpolation that earlier drafts used is
+        retired.
 
-        Ground truth at offset positions is obtained by bilinear interpolation
-        of the source signal (via `xarray.interp`). Targets are normalized to
-        [-1, 1] using the TRAINING data's `target_min` / `target_max`, not
-        the held-out signal's own min/max, so the model's outputs and the
-        held-out targets are on the same scale.
+        Coords use the same coordinate encoding and the same kwargs
+        (including SRFF seed) as the training data, so the held-out coords
+        inhabit the identical feature space the model trained on — only the
+        spatial positions differ.
+
+        Targets are normalized to [-1, 1] using the BASE-SOURCE `target_min` /
+        `target_max` (written to the training file's NetCDF attrs by the
+        preprocessor and carried through `SphericalDataset.__init__`), not
+        the held-out signal's own min/max. The same reference is used during
+        training, so the model's outputs and the held-out targets are on the
+        same scale and both fall within [-1, 1] regardless of which extremes
+        each spatial sub-sample happens to capture.
 
         Cached on first call; subsequent calls are O(1).
         """
         if self._held_out_eval is not None:
             return self._held_out_eval
 
-        with xr.open_dataset(self.file_path) as ds:
-            lats_deg = np.asarray(ds['y'].values)
-            lons_deg = np.asarray(ds['x'].values)
+        if not self.held_out_file_path:
+            raise RuntimeError(
+                "SphericalDataset.make_held_out_eval() needs a "
+                "held_out_file_path (the 511×1023 file produced by the "
+                "per-dataset preprocessor). Pass --held_out_path to main.py "
+                "or set DATASET_CONFIG[<dataset>]['held_out_path'] and "
+                "re-run preprocessing with "
+                "`python -m datasets.preprocess --dataset <name>`."
+            )
 
-            # Half-pixel midpoints: (H-1,) lats, (W-1,) lons. Strictly inside
-            # the source grid, so xr.interp does not need to extrapolate.
-            lats_held = 0.5 * (lats_deg[:-1] + lats_deg[1:])
-            lons_held = 0.5 * (lons_deg[:-1] + lons_deg[1:])
-
-            # Bilinear-interpolate the source signal at the offset grid.
-            ds_held = ds.interp(y=lats_held, x=lons_held, method='linear')
+        with xr.open_dataset(self.held_out_file_path) as ds_held:
+            lats_held = np.asarray(ds_held['y'].values, dtype=np.float32)
+            lons_held = np.asarray(ds_held['x'].values, dtype=np.float32)
             z_held = np.asarray(ds_held['z'].values, dtype=np.float32)
+
+        # Sanity checks: the file must be exactly the (H-1)×(W-1) shape we
+        # expect, and consistent with the training file's channel count.
+        expected_h, expected_w = self.height - 1, self.width - 1
+        if z_held.shape[0] != expected_h or z_held.shape[1] != expected_w:
+            raise RuntimeError(
+                f"held-out file {self.held_out_file_path} has shape "
+                f"{z_held.shape[:2]} but the training file is "
+                f"{self.height}×{self.width}, so we expected "
+                f"({expected_h}, {expected_w})."
+            )
 
         if z_held.ndim == 2:
             z_held = z_held[..., None]
@@ -133,8 +159,9 @@ class SphericalDataset(Dataset):
             raise ValueError(f"Unsupported held-out target shape {z_held.shape}.")
         Hh, Wh, C = z_held.shape
         assert C == self.num_channels, (
-            f"held-out channels {C} != training channels {self.num_channels}"
-        )
+                f"held-out channels {C} != training channels "
+                f"{self.num_channels} (file: {self.held_out_file_path})"
+            )
 
         # Encode the offset positions using the SAME encoding pipeline as
         # training. For SRFF, this re-uses the same ω draw (same seed).
@@ -149,8 +176,8 @@ class SphericalDataset(Dataset):
         denom = (self.target_max - self.target_min).clamp(min=1e-8)
         targets_held = 2.0 * ((targets_held - self.target_min) / denom) - 1.0
 
-        # Stash the offset lat/lon arrays so per-band breakdown code (Task 16)
-        # can reconstruct the spatial mapping without re-opening the file.
+        # Stash the offset lat/lon arrays so per-band breakdown code can
+        # reconstruct the spatial mapping without re-opening the file.
         self._held_out_lats_deg = lats_held
         self._held_out_lons_deg = lons_held
         self._held_out_eval = (coords_held, targets_held)

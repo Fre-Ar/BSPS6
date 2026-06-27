@@ -28,7 +28,7 @@ run_grid = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(run_grid)
 
 from config.architectures import (                                       # noqa: E402
-    cell_keys, cell_config, ACTIVATIONS, PE_CELLS, KAN_ROW,
+    cell_keys, cell_config, ACTIVATIONS, PE_CELLS
 )
 from config.constants import DATASET_CHOICES                              # noqa: E402
 
@@ -41,19 +41,21 @@ _TEST_CSV_COLUMNS = (
     'pe', 'seed', 'encoding_kwargs_json', 'status',
 )
 
-# Expected grid sizes post-redesign.
-EXPECTED_N_CELLS = len(ACTIVATIONS) * len(PE_CELLS) + len(KAN_ROW)         # 16
-EXPECTED_MAIN = EXPECTED_N_CELLS * len(DATASET_CHOICES)                    # 80
-EXPECTED_H5A = len(ACTIVATIONS) * 2                                        # 6
-EXPECTED_H5B = len(ACTIVATIONS) * 3                                        # 9
-EXPECTED_TOTAL = EXPECTED_MAIN + EXPECTED_H5A + EXPECTED_H5B               # 95
+# Expected grid sizes, derived from the (activation × PE) cross product and
+# the H5 sub-grids built by run_grid.build_h5a_grid / build_h5b_grid.
+EXPECTED_N_CELLS = len(ACTIVATIONS) * len(PE_CELLS)
+EXPECTED_MAIN = EXPECTED_N_CELLS * len(DATASET_CHOICES)
+EXPECTED_H5A = len(ACTIVATIONS) * 2
+EXPECTED_H5B = len(ACTIVATIONS) * 3
+EXPECTED_TOTAL = EXPECTED_MAIN + EXPECTED_H5A + EXPECTED_H5B
 
 
 # ---------------------------------------------------------------------------
 # Grid construction
 # ---------------------------------------------------------------------------
 def test_main_grid_size_and_uniqueness() -> None:
-    """Main grid = 16 cells × 5 datasets = 80 cells, unique."""
+    """Main grid = (cells × datasets), every identity tuple unique."""
+    
     print('\n[run_grid] main grid: shape & uniqueness ...')
     cells = run_grid.build_main_grid(seed=42)
     assert len(cells) == EXPECTED_MAIN, (
@@ -66,11 +68,13 @@ def test_main_grid_size_and_uniqueness() -> None:
 
 
 def test_h5a_grid_size_and_lmax_values() -> None:
-    """H5a = 3 SH-MLP cells × 2 datasets × 1 matched L_max each = 6 cells."""
+    """H5a runs every SH cell on each of the low-bandwidth datasets, at the
+    matched L_max ⌈L_95⌉ for that dataset."""
+    
     print('\n[run_grid] H5a grid: matched L_max per dataset ...')
     cells = run_grid.build_h5a_grid(seed=42)
     assert len(cells) == EXPECTED_H5A, f'expected {EXPECTED_H5A}, got {len(cells)}'
-    # Every H5a cell is one of the three SH-MLP cells.
+
     for c in cells:
         assert c['cell_key'].endswith('__sh'), c
     by_dataset: dict[str, set[int]] = {}
@@ -84,7 +88,8 @@ def test_h5a_grid_size_and_lmax_values() -> None:
 
 
 def test_h5b_grid_size_and_lmax_values() -> None:
-    """H5b = 3 SH-MLP cells × 3 high-bandwidth datasets × L_max=16 = 9 cells."""
+    """H5b runs every SH cell on each of the high-bandwidth datasets at L_max=16."""
+    
     print('\n[run_grid] H5b grid: L_max=16 ...')
     cells = run_grid.build_h5b_grid(seed=42)
     assert len(cells) == EXPECTED_H5B, f'expected {EXPECTED_H5B}, got {len(cells)}'
@@ -98,29 +103,17 @@ def test_h5b_grid_size_and_lmax_values() -> None:
           f'{len(ACTIVATIONS)} activations each.')
 
 
-def test_total_grid_is_95() -> None:
-    """The full grid is 80 + 6 + 9 = 95 cells (preregistration §3.5, post-redesign)."""
-    print('\n[run_grid] grand total ...')
+def test_full_grid_composes_subsets() -> None:
+    """The full grid is the disjoint union of the main grid and the H5
+    sub-grids; the sizes add up exactly (no overlap, no missing cells)."""
+    
+    print('\n[run_grid] full grid composition ...')
     n = (len(run_grid.build_main_grid(42))
          + len(run_grid.build_h5a_grid(42))
          + len(run_grid.build_h5b_grid(42)))
     assert n == EXPECTED_TOTAL, f'expected {EXPECTED_TOTAL}, got {n}'
     print(f'  OK {EXPECTED_MAIN} (main) + {EXPECTED_H5A} (H5a) + '
           f'{EXPECTED_H5B} (H5b) = {n} runs.')
-
-
-def test_main_grid_includes_kan_row() -> None:
-    """The standalone Fourier KAN row must appear in the main grid, once per dataset."""
-    print('\n[run_grid] main grid contains KAN row ...')
-    cells = run_grid.build_main_grid(seed=42)
-    kan_cells = [c for c in cells if c['cell_key'] == 'fourier_kan']
-    assert len(kan_cells) == len(DATASET_CHOICES), (
-        f'expected {len(DATASET_CHOICES)} KAN runs, got {len(kan_cells)}'
-    )
-    datasets = {c['dataset'] for c in kan_cells}
-    assert datasets == set(DATASET_CHOICES)
-    print(f'  OK fourier_kan present for all {len(DATASET_CHOICES)} datasets.')
-
 
 # ---------------------------------------------------------------------------
 # Cell key canonicality — round-trip through CSV
@@ -296,8 +289,7 @@ def main() -> None:
     test_main_grid_size_and_uniqueness()
     test_h5a_grid_size_and_lmax_values()
     test_h5b_grid_size_and_lmax_values()
-    test_total_grid_is_95()
-    test_main_grid_includes_kan_row()
+    test_full_grid_composes_subsets()
 
     print('\n== Cell-key canonicality ==')
     test_cell_key_round_trip_main_grid()

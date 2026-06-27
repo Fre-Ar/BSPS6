@@ -169,6 +169,10 @@ def get_opts():
     parser.add_argument('--data_path', type=str, default=ELEVATION_DATA_PATH,
                         help='Path to the pre-processed .nc file. '
                              'Overrides --dataset.')
+    parser.add_argument('--held_out_path', type=str, default='',
+                        help='Path to the 511×1023 held-out .nc file. '
+                             'Empty disables held-out evaluation.' 
+                             'Auto-resolved from --dataset unless given explicitly.')
     parser.add_argument('--dataset', type=str, default='etopo1',
                         choices=DATASET_CHOICES,
                         help='Which pre-processed benchmark dataset to train on. '
@@ -207,6 +211,10 @@ def get_opts():
         hparams.data_path = cfg['path']
     if '--out_features' not in explicit:
         hparams.out_features = cfg['out_features']
+    # Held-out 511×1023 evaluation file; 
+    # resolved from DATASET_CONFIG unless explicitly overridden on the CLI.
+    if '--held_out_path' not in explicit:
+        hparams.held_out_path = cfg.get('held_out_path', '')
 
     # Auto-set in_features from the coordinate encoding so the model's input
     # layer matches. User overrides via explicit --in_features still win.

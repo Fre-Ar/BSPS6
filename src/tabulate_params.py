@@ -1,17 +1,13 @@
 #!/usr/bin/env python
 """
-Tabulates parameter counts for all 16 cells
-of the locked grid (15 Coordinate-MLP cells = 3 activations × 5 PEs, plus
-the standalone Fourier Coordinate-KAN row).
+Tabulates parameter counts for every cell
+of the locked (activation × PE) Coordinate-MLP grid.
 
 Sanity check before pilots: across a fixed PE column, parameter counts
 should differ only by the trainable activation params (~20 for
 ScaledSine, 0 for ReLU/Gaussian). Across PEs, parameter counts vary by
-the PE's output dimensionality (D=2/3/64/1089/6144 for
-angular/cartesian/RFF/SH/FKAN at our locked encoding hyperparams). The
-latter variation is intrinsic to the PE design dimension and is
-accepted; INR-Bench themselves do not equalize parameters across PEs
-(see their note on page 5 of Li et al. 2025).
+the PE's output dimensionality. The latter variation is intrinsic to the
+PE design dimension and is accepted.
 
 
 Writes:
@@ -27,8 +23,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from config.architectures import (                                       # noqa: E402
-    ACTIVATIONS, PE_CELLS, KAN_ROW,
-    cell_keys, cell_cli_args, display_name, is_kan_cell,
+    ACTIVATIONS, PE_CELLS,
+    cell_keys, cell_cli_args, display_name,
     inr_bench_baseline,
 )
 
@@ -56,19 +52,16 @@ def _params_for_cell(cell_key: str) -> int:
 
 
 
-def main() -> None:
-    n_cells = len(cell_keys())
-    print(f'Tabulating parameter counts for {n_cells} cells '
-          f'({len(ACTIVATIONS)} activations × {len(PE_CELLS)} PEs '
-          f'+ {len(KAN_ROW)} KAN row)...\n')
+def main() -> None:    
+    print(f'Tabulating parameter counts for {len(cell_keys())} cells '
+          f'({len(ACTIVATIONS)} activations × {len(PE_CELLS)} PEs)...\n')
 
     counts: dict[str, int] = {}
     for k in cell_keys():
         try:
             n = _params_for_cell(k)
             counts[k] = n
-            tag = 'KAN' if is_kan_cell(k) else 'MLP'
-            print(f'  [{tag}] {k:34s} → {n:>12,} parameters')
+            print(f'  {k:34s} → {n:>12,} parameters')
         except Exception as e:
             print(f'  ! {k}: failed ({type(e).__name__}: {e})')
             counts[k] = -1
@@ -81,7 +74,7 @@ def main() -> None:
         'trainable parameter counts for the locked configurations.\n'
     )
 
-    # ---- Main MLP grid: rows = activation, columns = PE ----
+    # ---- Main grid: rows = activation, columns = PE ----
     act_keys = list(ACTIVATIONS.keys())
     pe_keys = list(PE_CELLS.keys())
     lines.append('## Coordinate-MLP grid\n')
@@ -105,17 +98,6 @@ def main() -> None:
         lines.append(f'| **{act_key}** | ' + ' | '.join(row_cells) +
                      f' | {best_s} |')
 
-    # ---- KAN row(s) ----
-    lines.append('\n## Coordinate-KAN row\n')
-    lines.append('| Cell | Parameters | INR-Bench |')
-    lines.append('|---|---|---|')
-    for kan_key in KAN_ROW:
-        v = counts.get(kan_key, -1)
-        b = inr_bench_baseline(kan_key)
-        v_s = f'{v:,}' if v >= 0 else 'FAIL'
-        b_s = f'{b:.2f}' if b is not None else '—'
-        lines.append(f'| {display_name(kan_key)} | {v_s} | {b_s} |')
-
     # ---- Variation summaries -----------------------------------------------
     def _summarize(group_name: str, group_cells: list[str]) -> str:
         vals = [counts[k] for k in group_cells if counts.get(k, -1) > 0]
@@ -127,8 +109,8 @@ def main() -> None:
 
     lines.append('\n## Within-activation parameter-count variation\n')
     lines.append(
-        'How much does parameter count vary across the 5 PEs for a fixed '
-        'activation? Driven by the PE\'s output dimensionality '
+        "How much does parameter count vary across PEs for a fixed "
+        "activation? Driven by the PE's output dimensionality "
         '(intrinsic to the encoding; preregistration §3.2).\n'
     )
     lines.append('| Activation | Min | Max | Max/Min |')
@@ -139,9 +121,9 @@ def main() -> None:
 
     lines.append('\n## Within-PE parameter-count variation\n')
     lines.append(
-        'How much does parameter count vary across the 3 activations for '
-        'a fixed PE? Should be small (only the trainable activation params '
-        'differ between cells in a PE column).\n'
+        'How much does parameter count vary across activations for a fixed '
+        'PE? Should be small (only the trainable activation params differ '
+        'between cells in a PE column).\n'
     )
     lines.append('| PE | Min | Max | Max/Min |')
     lines.append('|---|---|---|---|')

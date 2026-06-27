@@ -13,10 +13,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from config.architectures import (                                       # noqa: E402
-    ACTIVATIONS, PE_CELLS, KAN_ROW,
-    ARCHITECTURES, DISPLAY_NAMES, INR_BENCH_BASELINES,
-    cell_keys, cell_config, cell_cli_args, is_kan_cell,
-    display_name, inr_bench_baseline,
+    ACTIVATIONS, PE_CELLS, DISPLAY_NAMES, INR_BENCH_BASELINES,
+    cell_keys, cell_config, cell_cli_args, display_name
 )
 
 
@@ -24,22 +22,20 @@ EXPECTED_ACTS = ('relu', 'scaled_sine', 'gaussian')
 EXPECTED_PE_CELLS = (
     'none_angular', 'none_cartesian', 'rff', 'sh', 'fkan',
 )
-EXPECTED_KAN_KEY = 'fourier_kan'
-EXPECTED_N_CELLS = len(EXPECTED_ACTS) * len(EXPECTED_PE_CELLS) + 1   # 16
+EXPECTED_N_CELLS = len(EXPECTED_ACTS) * len(EXPECTED_PE_CELLS)
 
 
 def test_grid_shape() -> None:
-    """3 activations × 5 PE cells + 1 KAN row = 16 cells."""
+    """Grid is the full cross product of activations × PE cells."""
     print('\n[archs] grid shape ...')
     assert tuple(ACTIVATIONS.keys()) == EXPECTED_ACTS
     assert tuple(PE_CELLS.keys()) == EXPECTED_PE_CELLS
-    assert tuple(KAN_ROW.keys()) == (EXPECTED_KAN_KEY,)
     keys = cell_keys()
     assert len(keys) == EXPECTED_N_CELLS, (
         f'expected {EXPECTED_N_CELLS} cells, got {len(keys)}'
     )
     print(f'  OK {EXPECTED_N_CELLS} cells = '
-          f'{len(EXPECTED_ACTS)} × {len(EXPECTED_PE_CELLS)} + 1 KAN.')
+          f'{len(EXPECTED_ACTS)} × {len(EXPECTED_PE_CELLS)}.')
 
 
 def test_mlp_shape_locked_per_activation() -> None:
@@ -67,44 +63,31 @@ def test_pe_cells_have_expected_ce_pe_pairs() -> None:
         cfg = PE_CELLS[pe_key]
         assert cfg['ce'] == ce, f'{pe_key}: ce={cfg["ce"]} vs {ce}'
         assert cfg['pe'] == pe, f'{pe_key}: pe={cfg["pe"]} vs {pe}'
-    print('  OK all 5 PE cells correctly configured.')
+    print('  OK all PE cells correctly configured.')
 
 
 def test_fkan_locked_values() -> None:
-    """FKAN PE Ω = 32."""
+    """FKAN PE PE Ω is locked."""
     print('\n[archs] FKAN Ω = 32 ...')
     assert PE_CELLS['fkan']['omega'] == 32
     print('  OK FKAN Ω = 32.')
 
 
 def test_sh_locked_values() -> None:
-    """SH default L_max = 32 → input dim (32+1)^2 = 1089."""
+    """SH PE L_max is locked."""
     print('\n[archs] SH L_max = 32 ...')
-    assert PE_CELLS['sh']['sh_lmax'] == 32
-    print('  OK SH L_max = 32.')
+    print('\n[archs] SH L_max locked ...')
+    lmax = PE_CELLS['sh']['sh_lmax']
+    assert lmax == 32, f'expected sh_lmax=32, got {lmax}'
+    print(f'  OK SH L_max = {lmax}, input dim = {(lmax+1) ** 2}.')
 
 
 def test_rff_locked_values() -> None:
-    """RFF σ = 10, mapping_input = 32 (INR-Bench Appendix)."""
+    """RFF σ and L (mapping_input) are locked."""
     print('\n[archs] RFF locked values ...')
     assert PE_CELLS['rff']['ffn_scale'] == 10.0
     assert PE_CELLS['rff']['mapping_input'] == 32
     print('  OK RFF σ = 10, mapping_input = 32.')
-
-
-def test_kan_row_locked_values() -> None:
-    """Standalone Fourier KAN: 6×64, no PE, cartesian inputs."""
-    print('\n[archs] Fourier KAN row ...')
-    cfg = KAN_ROW['fourier_kan']
-    assert cfg['arch'] == 'kan'
-    assert cfg['act'] == 'fourier'
-    assert cfg['ce'] == 'cartesian'
-    assert cfg['pe'] == 'None'
-    assert cfg['kan_num_layers'] == 6
-    assert cfg['kan_layer_width'] == 64
-    assert is_kan_cell('fourier_kan')
-    print('  OK Fourier KAN row locked.')
-
 
 def test_inr_bench_baselines_confirmed() -> None:
     """The handful of confirmed INR-Bench Table III baselines are wired in."""
@@ -113,7 +96,7 @@ def test_inr_bench_baselines_confirmed() -> None:
     assert INR_BENCH_BASELINES['relu__rff'] == 33.65
     assert INR_BENCH_BASELINES['gaussian__fkan'] == 34.70
     assert INR_BENCH_BASELINES['fourier_kan'] == 33.56
-    print('  OK 4 confirmed Table III rows wired.')
+    print('  OK confirmed Table III rows wired.')
 
 
 def test_cli_args_well_formed() -> None:
@@ -133,7 +116,7 @@ def test_cli_args_well_formed() -> None:
 
 
 def test_unknown_cell_raises() -> None:
-    """cell_cli_args / display_name raise on unknown key."""
+    """cell_cli_args / cell_config raise on unknown key."""
     print('\n[archs] unknown key raises ValueError ...')
     for fn in (cell_cli_args, cell_config):
         try:
@@ -144,8 +127,8 @@ def test_unknown_cell_raises() -> None:
         raise AssertionError(f'{fn.__name__} should have raised')
 
 
-def test_display_names_present() -> None:
-    """Every cell has a non-empty display name; all 16 distinct."""
+def test_display_names_are_unique() -> None:
+    """Every cell has a non-empty, distinct display name."""
     print('\n[archs] display names ...')
     names = [display_name(k) for k in cell_keys()]
     for k, n in zip(cell_keys(), names):
@@ -156,20 +139,19 @@ def test_display_names_present() -> None:
 
 
 def main() -> None:
-    print('== Architecture configurations (post-redesign) ==')
+    print('== Architecture configurations ==')
     test_grid_shape()
     test_mlp_shape_locked_per_activation()
     test_pe_cells_have_expected_ce_pe_pairs()
     test_fkan_locked_values()
     test_sh_locked_values()
     test_rff_locked_values()
-    test_kan_row_locked_values()
     test_inr_bench_baselines_confirmed()
 
     print('\n== CLI args generation ==')
     test_cli_args_well_formed()
     test_unknown_cell_raises()
-    test_display_names_present()
+    test_display_names_are_unique()
 
     print('\nAll architecture-config tests passed.')
 

@@ -20,9 +20,12 @@ from metrics.breakdowns import compute_psnr_breakdowns
 class ImgRegCoordSystem(BaseCoordSystem):
     def setup(self, stage=None):
         ce_kwargs = dict(getattr(self.hparams, 'encoding_kwargs', {}) or {})
-        self.dataset = SphericalDataset(self.hparams.data_path,
-                                        self.hparams.ce,
-                                        **ce_kwargs)
+        held_out_path = getattr(self.hparams, 'held_out_path', '') or None
+        self.dataset = SphericalDataset(
+            self.hparams.data_path,
+            coordinate_encoding=self.hparams.ce,
+            encoding_kwargs=ce_kwargs,
+            held_out_file_path=held_out_path)
 
     def training_step(self, batch, batch_idx):
         pred = self(batch[COORD])['model_out']

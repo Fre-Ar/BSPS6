@@ -30,11 +30,10 @@ Notes on the (effective) single-seed protocol: every (cell, dataset,
 encoding_kwargs) combination has at most one row in the DataFrame
 (one seed). Hypothesis sample sizes are correspondingly small.
 
-Post-redesign factor structure:
-  * 3 activations:  ReLU, ScaledSine, Gaussian
-  * 5 PE cells:     none_angular, none_cartesian, rff, sh, fkan
-  * 1 KAN row:      Fourier KAN  (reported separately; excluded from H1/H3/H4)
-The 15 (activation × PE) Coordinate-MLP cells are the main analysis set.
+Factor structure (preregistration §3.2 / §3.3):
+  * activations: ReLU, ScaledSine, Gaussian
+  * PE cells:    none_angular, none_cartesian, rff, sh, fkan
+The (activation × PE) Coordinate-MLP cells are the main analysis set.
 """
 from __future__ import annotations
 
@@ -129,40 +128,37 @@ def _pe_cell_key(ce: str, pe: str) -> str:
 
 def _add_cell_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Augment df with derived columns:
-      * 'pe_cell':       PE cell-key from (ce, pe)
-      * 'activation':    activation cell-key from `act`
-      * 'is_mlp':        bool, True for Coordinate-MLP rows
+      * 'pe_cell':    PE cell-key from (ce, pe)
+      * 'activation': activation cell-key from `act`
     Returns a copy.
     """
     df = df.copy()
     df['pe_cell'] = [_pe_cell_key(c, p) for c, p in zip(df['ce'], df['pe'])]
     df['activation'] = df['act'].map(ACT_FLAG_TO_KEY).fillna(df['act'])
-    df['is_mlp'] = df['arch'] == 'mlp'
     return df
 
-def _main_grid_mlp(df: pd.DataFrame) -> pd.DataFrame:
-    """The 75 main-grid Coordinate-MLP cells (15 cells × 5 datasets). For SH,
-    only the L_max=SH_LMAX_DEFAULT cells qualify; the KAN row is excluded."""
+def _main_grid_cells(df: pd.DataFrame) -> pd.DataFrame:
+    """Completed main-grid cells. For SH, only the L_max=SH_LMAX_DEFAULT
+    cells qualify; H5a/H5b SH variants live in `_sh_cells_at_lmax`."""
     df = _completed(df)
     df = _add_cell_columns(df)
     sh_mask = df['pe_cell'] == 'sh'
     if 'encoding_kwargs_json' in df.columns:
         lmax = df['encoding_kwargs_json'].apply(_parse_lmax)
-        keep = df['is_mlp'] & ((~sh_mask) | (sh_mask & (lmax == SH_LMAX_DEFAULT)))
-    else:
-        keep = df['is_mlp']
-    return df[keep].copy()
+        keep = (~sh_mask) | (sh_mask & (lmax == SH_LMAX_DEFAULT))
+        return df[keep].copy()
+    return df
 
-def _sh_mlp_cells_at_lmax(df: pd.DataFrame, lmax: int) -> pd.DataFrame:
-    """SH MLP rows with the given L_max (excludes the KAN row by virtue of
-    `pe_cell == 'sh'`, which only applies to MLP rows)."""
+def _sh_cells_at_lmax(df: pd.DataFrame, lmax: int) -> pd.DataFrame:
+    """SH rows with the given L_max (used by the H5a/H5b sub-grid analyses)."""
     df = _completed(df)
     df = _add_cell_columns(df)
     if 'encoding_kwargs_json' not in df.columns:
         return df.iloc[0:0].copy()
     parsed = df['encoding_kwargs_json'].apply(_parse_lmax)
-    mask = df['is_mlp'] & (df['pe_cell'] == 'sh') & (parsed == lmax)
+    mask = (df['pe_cell'] == 'sh') & (parsed == lmax)
     return df[mask].copy()
+
 # ============================================================================
 # H1 — Polar singularities (subsection of H3.1)
 # ============================================================================
@@ -171,7 +167,7 @@ def evaluate_h1(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
 
     The cleanest in-grid contrast: both cells feed raw coordinates to a
     Coordinate-MLP with no PE; the only difference is the base coordinate
-    system. Paired by (activation, dataset) → n = 3 × 5 = 15 paired obs.
+    system. Paired by (activation, dataset) → activations × datasets obs.
 
     Test variable:
         Δ_i = polar_penalty(none_angular)_i − polar_penalty(none_cartesian)_i
@@ -183,14 +179,14 @@ def evaluate_h1(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
     if missing := (needed_cols - set(df.columns)):
         return _missing_data_decision('H1', missing)
 
-    mlp_main = _main_grid_mlp(df)
-    if len(mlp_main) == 0:
-        return _missing_data_decision('H1', {'mlp_main_grid_cells'})
+    main = _main_grid_cells(df)
+    if len(main) == 0:
+        return _missing_data_decision('H1', {'main_grid_cells'})
 
-    mlp_main['polar_penalty'] = mlp_main[eq_col] - mlp_main[polar_col]
+    main['polar_penalty'] = main[eq_col] - main[polar_col]
 
     # Pivot: rows = (activation, dataset), columns = pe_cell.
-    pivot = mlp_main.pivot_table(
+    pivot = main.pivot_table(
         index=['activation', 'dataset'],
         columns='pe_cell',
         values='polar_penalty',
@@ -336,20 +332,19 @@ def _bootstrap_eta_sq_and_diff(
 
 def evaluate_h3(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
     """Variance decomposition: PE vs activation vs dataset.
-
-    Restricted to the 15 Coordinate-MLP cells × 5 datasets = 75 cells. The
-    KAN row is reported separately (it does not participate in the PE ×
-    activation factorization).
+    
+    Operates on the (activation × PE × dataset) main-grid Coordinate-MLP
+    cells.
 
     Tests "PE dominates activation" via two conditions:
       1. Point ratio η²(pe) / η²(activation) ≥ 2.0.
-      2. 95% bootstrap CI of the difference η²(pe) − η²(activation)
+      2. 95% bootstrap CI of the difference η²(pe) - η²(activation)
          excludes 0.
     """
     if not {metric, 'arch', 'ce', 'pe', 'act', 'dataset'}.issubset(df.columns):
         missing = {metric, 'arch', 'ce', 'pe', 'act', 'dataset'} - set(df.columns)
         return _missing_data_decision('H3', missing)
-    sub = _main_grid_mlp(df)
+    sub = _main_grid_cells(df)
     sub = sub.dropna(subset=[metric]).copy()
     if len(sub) < 8:
         return _missing_data_decision('H3', {'enough_cells'})
@@ -541,13 +536,11 @@ def _bootstrap_r2_ci(df: pd.DataFrame, n_boot: int = DEFAULT_BOOTSTRAP_N,
 
 def evaluate_h4(df: pd.DataFrame) -> dict:
     """Linear regression of held_out_psnr on (L_95, CV, P99_norm) + activation
-    dummies, fit independently per PE cell. LOO-CV R² with bootstrap CI.
-
-    The KAN row is excluded (only one configuration per dataset, no
-    activation factor — the regression isn't well-defined there)."""
+    dummies, fit independently per PE cell. LOO-CV R² with bootstrap CI."""
+    
     if 'held_out_psnr' not in df.columns:
         return _missing_data_decision('H4', {'held_out_psnr'})
-    sub = _main_grid_mlp(df)
+    sub = _main_grid_cells(df)
     sub = sub.dropna(subset=['held_out_psnr']).copy()
     if len(sub) < 8:
         return _missing_data_decision('H4', {'enough_cells'})
@@ -631,13 +624,13 @@ def evaluate_h4(df: pd.DataFrame) -> dict:
 def evaluate_h5a(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
     """For SH datasets with L_95 < 32: PSNR(matched L_max) within 0.5 dB of L_max=32.
 
-    Δ_match = PSNR(matched) − PSNR(L_max=32), paired by (activation, dataset)
-    over the 3 SH MLP cells × 2 datasets = 6 obs.
+    Δ_match = PSNR(matched) - PSNR(L_max=32), paired by (activation, dataset)
+    across the SH cells and the low-bandwidth datasets.
     """
-    main_sh = _sh_mlp_cells_at_lmax(df, SH_LMAX_DEFAULT)
+    main_sh = _sh_cells_at_lmax(df, SH_LMAX_DEFAULT)
     deltas: list[tuple] = []
     for ds, lmax_matched in SH_LMAX_H5A.items():
-        matched = _sh_mlp_cells_at_lmax(df, lmax_matched)
+        matched = _sh_cells_at_lmax(df, lmax_matched)
         m = matched[matched['dataset'] == ds]
         b = main_sh[main_sh['dataset'] == ds]
         if len(m) == 0 or len(b) == 0:
@@ -710,11 +703,11 @@ def evaluate_h5a(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
 def evaluate_h5b(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
     """For SH datasets with L_95 > 32: PSNR(L_max=32) > PSNR(L_max=16).
 
-    Δ_LMax = PSNR(L_max=32) − PSNR(L_max=16), paired by (activation, dataset)
-    over the 3 SH MLP cells × 3 datasets = 9 obs.
+    Δ_LMax = PSNR(L_max=32) - PSNR(L_max=16), paired by (activation, dataset)
+    across the SH cells and the high-bandwidth datasets.
     """
-    main_sh = _sh_mlp_cells_at_lmax(df, SH_LMAX_DEFAULT)
-    h5b_sh = _sh_mlp_cells_at_lmax(df, SH_LMAX_H5B)
+    main_sh = _sh_cells_at_lmax(df, SH_LMAX_DEFAULT)
+    h5b_sh = _sh_cells_at_lmax(df, SH_LMAX_H5B)
     deltas: list[tuple] = []
     for ds in HIGH_BANDWIDTH_DATASETS:
         a = h5b_sh[h5b_sh['dataset'] == ds]

@@ -59,10 +59,14 @@ def _check_ds(ds_path: str, expected_channels: int) -> None:
 
 def _check_dataset_loader(dataset: str, encoding: str) -> None:
     path = DATASET_CONFIG[dataset]['path']
+    held_out_path = DATASET_CONFIG[dataset].get('held_out_path', None)
+    if held_out_path and not os.path.exists(held_out_path):
+        held_out_path = None
     C = DATASET_CONFIG[dataset]['out_features']
     kwargs = _ENCODING_KWARGS_FOR_TEST[encoding]
     sd = SphericalDataset(path, coordinate_encoding=encoding,
-                          encoding_kwargs=kwargs)
+                          encoding_kwargs=kwargs,
+                          held_out_file_path=held_out_path)
     N = len(sd)
     assert N == 512 * 1024, f'N = {N}, expected {512*1024}'
 
@@ -104,7 +108,14 @@ def _check_dataset_loader(dataset: str, encoding: str) -> None:
             f'SH Y_00 = {mean_y00}, expected {expected_y00}'
         )
         
-        # ----- Held-out half-pixel-offset eval (preregistration §3.4) -----
+    # ----- Held-out half-pixel-offset eval  -----
+    if held_out_path is None:
+        print(f'  OK {dataset}/{encoding}: N={N}, C={C}, coord={tuple(coord.shape)} '
+              f'(skipped held-out: {DATASET_CONFIG[dataset].get("held_out_path")} '
+              f'missing — run `python -m datasets.preprocess --dataset {dataset}` '
+              f'to generate it)')
+        return
+
     coords_held, targets_held = sd.make_held_out_eval()
     expected_N_held = sd.held_out_height * sd.held_out_width
     assert coords_held.shape == (expected_N_held, expected_dim), (
@@ -115,17 +126,21 @@ def _check_dataset_loader(dataset: str, encoding: str) -> None:
         f'{dataset}/{encoding}: held-out target shape {targets_held.shape}, '
         f'expected ({expected_N_held}, {C})'
     )
-    # Held-out targets are bilinear interpolations of training pixels using
-    # the training data's min/max for normalization. Since interpolation
-    # preserves the [min, max] range, held-out targets stay in [-1, 1]
-    # (modulo float slop).
+    
+    # Held-out targets come from a separately preprocessed 511×1023 file
+    # (sampled directly from the base source). Both training and held-out
+    # files normalize against the BASE-SOURCE per-channel min/max stored as
+    # NetCDF attrs by the preprocessor, so every sub-sample falls within
+    # [-1, 1] regardless of which extremes it captured.
     assert float(targets_held.min()) >= -1.01, (
         f'{dataset}/{encoding}: held-out target min '
-        f'{float(targets_held.min())} < -1'
+        f'{float(targets_held.min())} outside [-1, 1] — check that the '
+        f'preprocessor wrote source-derived target_min/target_max attrs '
+        f'and that both files use the same reference.'
     )
     assert float(targets_held.max()) <= 1.01, (
         f'{dataset}/{encoding}: held-out target max '
-        f'{float(targets_held.max())} > 1'
+        f'{float(targets_held.max())} outside [-1, 1] — same diagnosis as above.'
     )
     # Caching: a second call should return the same tensors (same id).
     coords_held_2, targets_held_2 = sd.make_held_out_eval()
