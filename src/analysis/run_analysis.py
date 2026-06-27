@@ -303,7 +303,7 @@ def main() -> None:
 
     if not os.path.exists(args.runs_csv):
         print(f"[run_analysis] runs.csv not found at {args.runs_csv}. "
-              "Run scripts/run_grid.py first.")
+              "Run src/run_grid.py first.")
         sys.exit(1)
 
     df = pd.read_csv(args.runs_csv)

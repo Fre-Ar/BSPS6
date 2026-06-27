@@ -1,5 +1,5 @@
 """
-Unit tests for scripts/run_grid.py — grid construction, cell-key canonicality,
+Unit tests for src/run_grid.py — grid construction, cell-key canonicality,
 and resume-detection against a synthetic runs.csv (preregistration §3.5).
 
 We do NOT spawn any subprocesses; all assertions are against the grid-building
@@ -40,12 +40,12 @@ _TEST_CSV_COLUMNS = (
 )
 
 # Expected grid sizes, derived from the (activation × PE) cross product and
-# the H5 sub-grids built by run_grid.build_h5a_grid / build_h5b_grid.
+# the sub-grids built by run_grid.build_sh_post_saturation_grid / build_sh_pre_saturation_grid. 
 EXPECTED_N_CELLS = len(ACTIVATIONS) * len(PE_CELLS)
 EXPECTED_MAIN = EXPECTED_N_CELLS * len(DATASET_CHOICES)
-EXPECTED_H5A = len(ACTIVATIONS) * 2
-EXPECTED_H5B = len(ACTIVATIONS) * 3
-EXPECTED_TOTAL = EXPECTED_MAIN + EXPECTED_H5A + EXPECTED_H5B
+EXPECTED_POST_SATURATION = len(ACTIVATIONS) * 2
+EXPECTED_PRE_SATURATION = len(ACTIVATIONS) * 3
+EXPECTED_TOTAL = EXPECTED_MAIN + EXPECTED_POST_SATURATION + EXPECTED_PRE_SATURATION
 
 
 # ---------------------------------------------------------------------------
@@ -65,14 +65,11 @@ def test_main_grid_size_and_uniqueness() -> None:
           f'({EXPECTED_N_CELLS} cells × {len(DATASET_CHOICES)} datasets).')
 
 
-def test_h5a_grid_size_and_lmax_values() -> None:
-    """H5a runs every SH cell on each of the low-bandwidth datasets, at the
-    matched L_max ⌈L_95⌉ for that dataset."""
+def test_sh_post_saturation_grid() -> None:
     
-    print('\n[run_grid] H5a grid: matched L_max per dataset ...')
-    cells = run_grid.build_h5a_grid(seed=42)
-    assert len(cells) == EXPECTED_H5A, f'expected {EXPECTED_H5A}, got {len(cells)}'
-
+    print('\n[run_grid] sh_post_saturation grid: matched L_max per dataset ...')
+    cells = run_grid.build_sh_post_saturation_grid(seed=42)
+    assert len(cells) == EXPECTED_POST_SATURATION, f'expected {EXPECTED_POST_SATURATION}, got {len(cells)}'
     for c in cells:
         assert c['cell_key'].endswith('__sh'), c
     by_dataset: dict[str, set[int]] = {}
@@ -81,37 +78,68 @@ def test_h5a_grid_size_and_lmax_values() -> None:
         by_dataset.setdefault(c['dataset'], set()).add(int(c['extra_cli'][lmax_idx]))
     assert by_dataset['era5'] == {13}, f'ERA5 L_max: {by_dataset["era5"]}'
     assert by_dataset['hdri_sky'] == {31}, f'HDRI_sky L_max: {by_dataset["hdri_sky"]}'
-    print(f'  OK H5a: ERA5 L_max=13, HDRI_sky L_max=31, {len(ACTIVATIONS)} '
+    print(f'  OK sh_post_saturation: ERA5 L_max=13, HDRI_sky L_max=31, {len(ACTIVATIONS)} '
           f'activations each.')
 
 
-def test_h5b_grid_size_and_lmax_values() -> None:
-    """H5b runs every SH cell on each of the high-bandwidth datasets at L_max=16."""
-    
-    print('\n[run_grid] H5b grid: L_max=16 ...')
-    cells = run_grid.build_h5b_grid(seed=42)
-    assert len(cells) == EXPECTED_H5B, f'expected {EXPECTED_H5B}, got {len(cells)}'
+def test_sh_pre_saturation_grid() -> None:
+    """sh_pre_saturation runs every SH cell on each of the high-bandwidth datasets at L_max=16."""
+    print('\n[run_grid] sh_pre_saturation grid: L_max=16 ...')
+    cells = run_grid.build_sh_pre_saturation_grid(seed=42)
+    assert len(cells) == EXPECTED_PRE_SATURATION, f'expected {EXPECTED_PRE_SATURATION}, got {len(cells)}'
     for c in cells:
         assert c['cell_key'].endswith('__sh'), c
         lmax_idx = c['extra_cli'].index('--sh_lmax') + 1
         assert int(c['extra_cli'][lmax_idx]) == 16
     datasets = {c['dataset'] for c in cells}
     assert datasets == {'etopo1', 'hdri_urban', 'cmb'}, datasets
-    print(f'  OK H5b: L_max=16 for ETOPO1, HDRI_urban, CMB, '
+    print(f'  OK sh_pre_saturation: L_max=16 for ETOPO1, HDRI_urban, CMB, '
           f'{len(ACTIVATIONS)} activations each.')
 
 
+
 def test_full_grid_composes_subsets() -> None:
-    """The full grid is the disjoint union of the main grid and the H5
+    """The full grid is the disjoint union of the main grid and the SH
     sub-grids; the sizes add up exactly (no overlap, no missing cells)."""
-    
     print('\n[run_grid] full grid composition ...')
     n = (len(run_grid.build_main_grid(42))
-         + len(run_grid.build_h5a_grid(42))
-         + len(run_grid.build_h5b_grid(42)))
+         + len(run_grid.build_sh_post_saturation_grid(42))
+         + len(run_grid.build_sh_pre_saturation_grid(42)))
     assert n == EXPECTED_TOTAL, f'expected {EXPECTED_TOTAL}, got {n}'
-    print(f'  OK {EXPECTED_MAIN} (main) + {EXPECTED_H5A} (H5a) + '
-          f'{EXPECTED_H5B} (H5b) = {n} runs.')
+    # build_grid('all') / 'main' / 'sh_ablation' return the right cell counts.
+    assert len(run_grid.build_grid('all', 42)) == n
+    assert len(run_grid.build_grid('main', 42)) == EXPECTED_MAIN
+    assert len(run_grid.build_grid('sh_ablation', 42)) == (
+        EXPECTED_POST_SATURATION + EXPECTED_PRE_SATURATION
+    )
+    print(f'  OK {EXPECTED_MAIN} (main) + {EXPECTED_POST_SATURATION} (sh_post) + '
+          f'{EXPECTED_PRE_SATURATION} (sh_pre) = {n} runs.')
+
+
+
+def test_filters_narrow_the_grid() -> None:
+    """--filter_pe / --filter_act / --filter_dataset narrow the selected set
+    correctly (and combine as set intersection)."""
+    print('\n[run_grid] filter helpers ...')
+    cells = run_grid.build_main_grid(42)
+    # Single-axis: keep only the SH cells.
+    only_sh = run_grid.apply_filters(cells, {'sh'}, None, None)
+    assert all(c['cell_key'].endswith('__sh') for c in only_sh)
+    assert len(only_sh) == len(ACTIVATIONS) * len(DATASET_CHOICES)
+    # Multi-axis intersection: 2 PEs × 1 activation × 1 dataset = 2 cells.
+    sub = run_grid.apply_filters(
+        cells, {'none_angular', 'rff'}, {'relu'}, {'cmb'},
+    )
+    assert len(sub) == 2
+    for c in sub:
+        assert c['dataset'] == 'cmb'
+        act, pe = c['cell_key'].split('__', 1)
+        assert act == 'relu' and pe in {'none_angular', 'rff'}
+    # None-filter is a no-op.
+    assert run_grid.apply_filters(cells, None, None, None) == cells
+    print(f'  OK pe={{sh}} → {len(only_sh)} cells; '
+          f'pe={{none_angular,rff}} × act={{relu}} × dataset={{cmb}} → '
+          f'{len(sub)} cells.')
 
 # ---------------------------------------------------------------------------
 # Cell key canonicality — round-trip through CSV
@@ -140,34 +168,33 @@ def test_cell_key_round_trip_main_grid() -> None:
     print(f'  OK {EXPECTED_MAIN} main-grid cells round-trip through CSV.')
 
 
-def test_cell_key_round_trip_h5a_h5b() -> None:
-    """H5a and H5b cells (which override --sh_lmax) also round-trip."""
-    print('\n[run_grid] cell-key round-trip: H5a + H5b ...')
-    for c in run_grid.build_h5a_grid(42) + run_grid.build_h5b_grid(42):
+def test_cell_key_round_trip_sh_post_sh_pre() -> None:
+    """sh_post_saturation and sh_pre_saturation cells (which override --sh_lmax) also round-trip."""
+    print('\n[run_grid] cell-key round-trip: sh_post_saturation + sh_pre_saturation ...')
+    for c in run_grid.build_sh_post_saturation_grid(42) + run_grid.build_sh_pre_saturation_grid(42):
         row = _row_from_plan(c)
         plan_key = run_grid.cell_key_from_plan(c)
         row_key = run_grid.cell_key_from_row(row)
         assert plan_key == row_key, f'mismatch for {c}: plan={plan_key} row={row_key}'
-    print(f'  OK {EXPECTED_H5A} H5a + {EXPECTED_H5B} H5b cells round-trip.')
+    print(f'  OK {EXPECTED_POST_SATURATION} sh_post_saturation + {EXPECTED_PRE_SATURATION} sh_pre_saturation cells round-trip.')
 
-
-def test_h5a_distinct_from_main_grid_sh_cell() -> None:
+def test_sh_post_distinct_from_main_grid_sh_cell() -> None:
     """A main-grid SH cell (L_max=32 default) is a DIFFERENT cell from the
-    H5a matched cell on the same dataset (L_max=13 or 31)."""
-    print('\n[run_grid] H5a cells distinct from main-grid SH cells ...')
+    sh_post_saturation matched cell on the same dataset (L_max=13 or 31)."""
+    print('\n[run_grid] sh_post_saturation cells distinct from main-grid SH cells ...')
     main_cells = run_grid.build_main_grid(seed=42)
-    h5a_cells = run_grid.build_h5a_grid(seed=42)
+    sh_post_cells = run_grid.build_sh_post_saturation_grid(seed=42)
     for act_key in ACTIVATIONS:
         cell_key = f'{act_key}__sh'
         main_sh = next(c for c in main_cells
                        if c['cell_key'] == cell_key and c['dataset'] == 'era5')
-        h5a_sh = next(c for c in h5a_cells
+        sh_post_sh = next(c for c in sh_post_cells
                       if c['cell_key'] == cell_key and c['dataset'] == 'era5')
         assert (run_grid.cell_key_from_plan(main_sh)
-                != run_grid.cell_key_from_plan(h5a_sh)), (
-            f'main {main_sh} and h5a {h5a_sh} collided on the same cell key'
+                != run_grid.cell_key_from_plan(sh_post_sh)), (
+            f'main {main_sh} and sh_post {sh_post_sh} collided on the same cell key'
         )
-    print('  OK main-grid (L_max=32) and H5a (matched L_max) are distinct cells.')
+    print('  OK main-grid (L_max=32) and sh_post_saturation (matched L_max) are distinct cells.')
 
 
 # ---------------------------------------------------------------------------
@@ -221,18 +248,17 @@ def test_resume_empty_csv_runs_everything() -> None:
     assert len(pending) == len(main_cells)
     print(f'  OK no CSV → {len(pending)} pending (full grid).')
 
-
 def test_resume_distinguishes_lmax_variants() -> None:
     """Marking the main-grid SH cell (L_max=32) as completed does NOT cause
-    the H5a SH cell (L_max=13) on the same dataset to be skipped."""
+    the sh_post_saturation SH cell (L_max=13) on the same dataset to be skipped."""
     print('\n[run_grid] resume detection: L_max variants distinct ...')
     main = run_grid.build_main_grid(seed=42)
-    h5a = run_grid.build_h5a_grid(seed=42)
+    sh_post = run_grid.build_sh_post_saturation_grid(seed=42)
 
     main_sh_era5 = next(c for c in main
                         if c['cell_key'] == 'scaled_sine__sh'
                         and c['dataset'] == 'era5')
-    h5a_sh_era5 = next(c for c in h5a
+    sh_post_sh_era5 = next(c for c in sh_post
                        if c['cell_key'] == 'scaled_sine__sh'
                        and c['dataset'] == 'era5')
 
@@ -241,33 +267,35 @@ def test_resume_distinguishes_lmax_variants() -> None:
         _write_runs_csv(csv_path, [_row_from_plan(main_sh_era5)])
         completed = run_grid.load_completed_cells(csv_path)
         assert run_grid.cell_key_from_plan(main_sh_era5) in completed
-        assert run_grid.cell_key_from_plan(h5a_sh_era5) not in completed, (
-            'H5a (L_max=13) should not be skipped when main-grid (L_max=32) '
+        assert run_grid.cell_key_from_plan(sh_post_sh_era5) not in completed, (
+            'sh_post_saturation (L_max=13) should not be skipped when main-grid (L_max=32) '
             'is completed'
         )
-        print('  OK main-grid (L_max=32) completed does not skip H5a (L_max=13).')
+        print('  OK main-grid (L_max=32) completed does not skip sh_post_saturation (L_max=13).')
+
 
 
 # ---------------------------------------------------------------------------
 # Save dir + describe helpers
 # ---------------------------------------------------------------------------
-def test_save_dir_includes_tag_for_h5() -> None:
-    """The per-cell save dir for H5a/H5b includes the tag so they don't
+def test_save_dir_includes_sub_grid_tag() -> None:
+    """The per-cell save dir for sh_post_saturation/sh_pre_saturation includes the tag so they don't
     collide with the main-grid SH cell on the same (cell_key, dataset)."""
-    print('\n[run_grid] cell_save_dir distinguishes main / H5a / H5b ...')
+    print('\n[run_grid] cell_save_dir distinguishes main / sh_post_saturation / sh_pre_saturation ...')
     main = next(c for c in run_grid.build_main_grid(42)
                 if c['cell_key'] == 'scaled_sine__sh'
                 and c['dataset'] == 'era5')
-    h5a = next(c for c in run_grid.build_h5a_grid(42)
+    sh_post = next(c for c in run_grid.build_sh_post_saturation_grid(42)
                if c['cell_key'] == 'scaled_sine__sh'
                and c['dataset'] == 'era5')
 
     d_main = run_grid.cell_save_dir('logs/grid', main)
-    d_h5a = run_grid.cell_save_dir('logs/grid', h5a)
-    assert d_main != d_h5a, f'collision: both went to {d_main}'
-    assert 'h5a' in d_h5a, f'H5a tag missing from {d_h5a}'
+    d_sh_post = run_grid.cell_save_dir('logs/grid', sh_post)
+    assert d_main != d_sh_post, f'collision: both went to {d_main}'
+    assert 'sh_post' in d_sh_post, f'sh_post_saturation tag missing from {d_sh_post}'
     print(f'  OK main → {d_main}')
-    print(f'     H5a  → {d_h5a}')
+    print(f'     sh_post_saturation  → {d_sh_post}')
+
 
 
 def test_describe_cell_contains_cell_key_and_dataset() -> None:
@@ -282,14 +310,15 @@ def test_describe_cell_contains_cell_key_and_dataset() -> None:
 def main() -> None:
     print('== Grid construction ==')
     test_main_grid_size_and_uniqueness()
-    test_h5a_grid_size_and_lmax_values()
-    test_h5b_grid_size_and_lmax_values()
+    test_sh_post_saturation_grid()
+    test_sh_pre_saturation_grid()
     test_full_grid_composes_subsets()
+    test_filters_narrow_the_grid()
 
     print('\n== Cell-key canonicality ==')
     test_cell_key_round_trip_main_grid()
-    test_cell_key_round_trip_h5a_h5b()
-    test_h5a_distinct_from_main_grid_sh_cell()
+    test_cell_key_round_trip_sh_post_sh_pre()
+    test_sh_post_distinct_from_main_grid_sh_cell()
 
     print('\n== Resume detection ==')
     test_resume_skips_completed_cells()
@@ -297,7 +326,7 @@ def main() -> None:
     test_resume_distinguishes_lmax_variants()
 
     print('\n== Save dir + helpers ==')
-    test_save_dir_includes_tag_for_h5()
+    test_save_dir_includes_sub_grid_tag()
     test_describe_cell_contains_cell_key_and_dataset()
 
     print('\nAll run_grid tests passed.')

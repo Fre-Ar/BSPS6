@@ -1,104 +1,366 @@
-# BSPS6
+# BSPS6 — Setup and Usage
 
-## What do we want to achieve?
-* INRs -> compressed, contiguous, differentiable signal from a discrete one
-* SOTA: Euclidean domains (1D audio, 2D images, 3D shapes).
-* A lot of data is inherently spherical: 
-    - anything globe (weather, elevation, etc)
-    - most things space (satellite imagery, astronomical surveys)
-    - 360° camera panoramas from VR headsets, environment maps for HDR lighting in graphics and VFX
-    - brain-surface scans in medical imaging
-    - LiDAR from spinning sensors.
-=> the sphere's topology introduces design choices that simply don't exist on a flat domain
-* Goal: Answer "What are those choices, and which ones matter most?"
-* One of these choices is "how to represent a point on a sphere as numbers?"
-    - (lat,long)
-    - (x,y,z)
-    - spherical harmonics 
-    - spherical RFF
-## Choice of datasets
-2 main axes: 
-* bandwidth (how much small-scale detail the signal contains)
-* isotropy (whether the signal's character depends on where you are on the sphere or is statistically uniform across it)
-+ others: sharpness, dynamic range, and scalar vs RGB.
+End-to-end instructions for setting up the project from a fresh machine and
+running experiments. Tested on macOS (Apple Silicon, MPS) and Windows with an NVIDIA GPU (CUDA).
 
-### CMB: Cosmic Microwave Background
-stationary, isotropic, nearly gaussian random field.
-### ERA5: global temperature map 
-low frequency (smooth), but anisotropic 
-### ETOPO1: global elevation map
-mixes smooth (oceans) and sharp (continents) features at multiple spatial scales
--> literature says grid-based methods outperform INRs
-### HDRI (sky): 360° panorama of a sky
-low bandwidth, moderate anisotropy: RGB control case
-### HDRI (urban): 360° panorama of the Shanghai skyline at sunset
-sharp sky–water horizon: High bandwidth, strongly anisotropic, step-function at the horizon
+The benchmark itself, the design rationale, and the analyses are described
+in [`docs/preregistration.md`](docs/preregistration.md). This file is the
+operational how-to.
 
-## Characterizations
-*Spectral complexity (C_l) & Effective bandwidth (L_95)*
-Think of harmonics (sine waves), and how any 1d signal can be represented as a weighted sum of sine waves.
-Spherical harmonics are those sine waves, but for 3D.
-* The signal's power spectrum C_l shows how much of its total variance lives at each spherical harmonic degrees l.
-* Effective bandwidth, or L_95  is the smallest degree at which we've captured 95% of that variance. Ex. A signal with L_95 = 13 (ERA5) is essentially smooth: thirteen global wave patterns account for nearly everything. 
+---
 
-*Isotropy*
-* Variance of the signal per band of latitude.
--> Answers "Is the signal statistically uniform across all directions?"
+## 1. Get the code
 
-*Spatial gradient...*
-per-pixel gradient magnitude
-    *dynamic range*: min & max of the spatial gradient
-    *mean*: average gradient magnitude
-    *sharpness*: the 99th percentile of the spatial gradient captures the sharpest 1% of edges, normalized across signals with different units by dividing by the dynamic range. 
-        - High normalized P99 means the signal has locally sharp edges relative to its overall variation (coastlines, urban building outlines, etc) -> presence of edges that INRs struggle with
+```sh
+git clone https://github.com/Fre-Ar/BSPS6.git
+cd BSPS6
+```
 
-## Hypotheses
-*H1 - Polar Singularities*: Naive angular encoding (lat/lon) performs systematically worse than all other encodings across all datasets and architectures.
-- "Naive angular coordinates (lat, long) will exhibit severe localized artifacts (particularly at the ±180° longitude seam) and higher RMSE at the poles due to coordinate singularities, whereas embedding inputs into 3D Cartesian space (x,y,z) or using Spherical Harmonics will yield uniform error distribution across the sphere."
-> @How to test@: after training, bin the per-pixel error by latitude and look for pole-biased residuals in the angular models that don't appear in the others.
+---
 
-*H2 - Spectral Math*: Spherical harmonic features outperform other encodings on spectrally simple signals (low effective bandwidth), but this advantage diminishes or reverses on high-frequency signals.
-- "SH features are the frequency basis on the sphere. If a signal's L_95 fits within our cap L_max (set to 32, giving 1089 features), SH has everything it needs: the downstream network just has to learn a linear combination. If L_95 exceeds L_max, SH is physically capped, and encodings like RFF that cover a wider effective frequency range (random frequencies drawn from a broad distribution) should pull ahead."
-  
-> @How to test@: We expect SH to win on ERA5 (L_95 = 13) and HDRI sky (L_95 = 31), tie or fall behind on ETOPO1 (L_95 = 45), and lose clearly on CMB (L_95 = 236) and HDRI urban (L_95 = 134).
+## 2. Python environment
 
-*H3 - Encoding dominance*: The ranking of coordinate encodings is consistent across all four architectures.
-- "Which coordinate encoding is used for INRs learning on spherical signals matters more than which network architecture the INR has."
-> @How to test@: run every (encoding × architecture × dataset) cell of the grid and ask whether the ranking of encodings is consistent across architectures and datasets, and whether it's more consistent than the ranking of architectures is across encodings and datasets. 
+Python **3.10+** is required.
 
-*H4 — Characterization predicts performance*: 3 scalars per dataset (L_95, Isotropy, normalized P99). 
-- "It is possible to predict fitting performance of a INR model given spherical signal characterization"
-> @How to test@: fit a small regression PSNR ≈ f(L_95, CV, P99_norm, encoding, arch) on the 80-cell grid and report which metrics are predictive for which encoding.
-=> spherical extension of Vonderfecht & Liu 2024's "SIREN error prediction"
+### 2a. Create a virtual environment
+
+**macOS / Linux:**
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+**Windows (PowerShell):**
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+### 2b. Install PyTorch with the right device backend
+
+PyTorch needs the build that matches your hardware.
+
+**macOS (Apple Silicon / MPS) or CPU-only:**
+
+```sh
+pip install torch
+```
+
+**Windows with NVIDIA GPU (CUDA 12.1):**
+
+```sh
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+For other CUDA versions, see the wheel selector at <https://pytorch.org/get-started/locally/>.
+
+### 2c. Install the rest of the dependencies
+
+```sh
+pip install -r requirements.txt
+```
+
+Verify your install picked up the right device:
+
+```sh
+PYTHONPATH=src python -c "from utils.device import device_display_name; print(device_display_name())"
+```
+
+Expected output: `cuda (<GPU name>)` on Windows with NVIDIA, or
+`mps (Apple Silicon / Metal)` on Mac, or `cpu` otherwise.
+
+---
+
+## 3. Raw datasets
+
+The benchmark uses five spherical signals. Each comes from a different
+public source; the preprocessor turns each one into a standardized 512×1024
+NetCDF (training file) and a 511×1023 NetCDF (held-out file) under
+`src/datasets/files/`.
+
+**Total raw-data download is roughly 2.5–3 GB.**
+
+Create the directory if it isn't there yet:
+
+```sh
+mkdir -p src/datasets/files
+```
+
+### 3a. ETOPO1 (NOAA elevation)
+
+Download the ice-surface .grd file from the NOAA archive:
+
+* <https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO1/data/ice_surface/grid_registered/netcdf/ETOPO1_Ice_g_gmt4.grd.gz>
+
+Decompress and place at `src/datasets/files/ETOPO1_Ice_g_gmt4.grd`.
+
+### 3b. ERA5 (ECMWF 2m temperature)
+
+The pipeline ships a snapshot of ERA5 2m temperature for 2023-06-15 12:00
+UTC. The simplest path is to download it via the Copernicus CDS:
+
+1. Register a free account at <https://cds.climate.copernicus.eu/> and
+   accept the ERA5 license.
+2. Install the CDS API key (`~/.cdsapirc` on Linux/Mac,
+   `%USERPROFILE%\.cdsapirc` on Windows).
+3. Use the CDS web UI to download "ERA5 hourly data on single levels" for
+   `2m_temperature`, single hour `2023-06-15 12:00`, NetCDF format,
+   geographical area "Whole available region". Or use the `cdsapi` Python
+   client (already in `requirements.txt`).
+4. Save the resulting `.nc` file as
+   `src/datasets/files/ERA5_t2m_2023_06_15_1200.nc`.
+
+### 3c. Planck CMB (ESA Planck Legacy Archive)
+
+Download the SMICA full-mission temperature map (HEALPix Nside=2048 FITS,
+~2 GB):
+
+* <https://pla.esac.esa.int/pla-sl/data-action?MAP.MAP_ID=COM_CMB_IQU-smica_2048_R3.00_full.fits>
+
+Place at `src/datasets/files/COM_CMB_IQU-smica_2048_R3.00_full.fits`.
+
+### 3d. HDRI (Poly Haven, two equirectangular panoramas)
+
+Download the 2k `.exr` files (free under CC0):
+
+* Sky: <https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky> →
+  download "2K EXR" → `src/datasets/files/kloofendal_48d_partly_cloudy_puresky_2k.exr`
+* Urban: <https://polyhaven.com/a/shanghai_bund> → download "2K EXR" →
+  `src/datasets/files/shanghai_bund_2k.exr`
+
+---
+
+## 4. Preprocess the datasets
+
+Run the preprocessor for all five datasets in one shot:
+
+```sh
+PYTHONPATH=src python -m datasets.preprocess
+```
 
 
-*H5 — Characterization is actionable*: L_max-matching for SH.
-- "SH encoding with L_max ≈ L_95 achieves within ε dB of SH with L_max=32 on the same dataset, at significantly lower input dimension."
-> @How to test@: Add one extra SH column per dataset.
-=> If true, tells how to set the SH hyperparameter. If false, spectral headroom matters beyond just capturing 95% of energy.
+Each invocation produces **two** NetCDF files per dataset, both written to
+`src/datasets/files/`:
 
-## Data collection
+* `*_512x1024.nc` — the training grid.
+* `*_511x1023_held_out.nc` — the half-pixel-offset grid used for held-out
+  PSNR (preregistration §3.4). Both files are sampled from the same base
+  source and share the same `target_min` / `target_max` normalization
+  reference, so every sub-sample lies within [-1, 1].
 
-*Procedure*: 
-- For each cell of the grid (encoding × arch × dataset × seed), what gets logged?
-- At minimum: 
-  * training PSNR per epoch
-  * validation PSNR per epoch
-  * final test PSNR
-  * per-region PSNR breakdowns (polar bands, equatorial band; per-channel for HDRI). 
-- Define the test set explicitly
-- uniform spherical sampling of N points, fixed seed, identical across all cells.
-- Define early-stopping criterion before the fact (e.g., "patience=10 epochs on val PSNR, max 200 epochs").
-- 3 seeds minimum to compute a standard error and run paired tests. 
+The training file is ~5 MB per scalar dataset, ~15 MB per RGB dataset.
 
-*Statistical test per hypothesis, defined in advance*:
-- H1 (polar artifacts): paired Wilcoxon signed-rank test on (polar PSNR − equatorial PSNR) for angular vs. Cartesian, across the 5 datasets × 3 seeds = 15 paired observations per arch.
-- H4 (characterization predicts): leave-one-dataset-out cross-validation R² with a 95% bootstrap CI. Pre-commit to "we claim characterization is predictive iff CV R² > 0.5 with CI excluding 0."
-- Variance decomposition (your H3 reformulated): two-way ANOVA with (encoding, arch) factors, report η² for each. Pre-commit to "encoding dominates iff η²(encoding) > 2 × η²(arch)."
-- explicitly scope the paper to "five representative spherical signals" and never claim generalization
+---
 
-- Quantitative result for H2: for L_95 < 30 SH dominates by ≥3 dB; for L_95 > 60 RFF dominates; in between it's tied
-- For H3: quantitative attribution to how much encoding choice matters versus architecture choice on S².
-- For H4: given a new spherical signal, you can compute three cheap statistics and predict which encoding will work best, without running the model.
-For H5: characterization is prescriptive, not just descriptive; you can pick a hyperparameter from a signal statistic. 
+## 5. Run the tests
 
+The test suite is fast and catches almost all setup mistakes:
+
+```sh
+PYTHONPATH=src python tests/test_architectures.py
+PYTHONPATH=src python tests/test_run_grid.py
+PYTHONPATH=src python tests/test_runs_csv.py
+PYTHONPATH=src python tests/test_datasets.py
+PYTHONPATH=src python tests/test_analysis.py
+PYTHONPATH=src python tests/test_configs_smoke.py
+```
+
+All six should print `All ... tests passed.`. `test_datasets.py` and the
+per-dataset block of `test_configs_smoke.py` require the preprocessed
+NetCDFs from §4 to be present; the others run standalone.
+
+**Always run the smoke test before launching the full grid on a new
+machine.** `test_configs_smoke.py` instantiates every (activation × PE)
+cell + every SH `L_max` value the launcher will use, runs forward +
+5 Adam steps on a tiny batch of coordinates that includes both polar
+caps and the longitude seam, and verifies that predictions, losses,
+gradients, and post-step parameters are all finite. It also runs one real
+end-to-end check per preprocessed dataset. Total wall-clock is ~30–90 s
+on CPU (no GPU needed). This catches the silent-NaN class of bug — e.g.,
+an activation that divides by zero in a corner of the input space — before
+you burn 75 GPU-hours on a grid that produces `nan` PSNRs.
+
+---
+
+## 6. Run the experiments
+
+Per [`docs/preregistration.md`](docs/preregistration.md) §3.5, the locked
+grid is 90 runs at 1 seed (75 main + 6 SH post-saturation + 9 SH
+pre-saturation).
+
+### 6a. The whole grid
+
+```sh
+python src/run_grid.py
+```
+
+Resume policy: a cell with `status='completed'` in `results/runs.csv` is
+skipped on subsequent invocations. If a run crashes or OOMs, the launcher
+records the failure status and you can re-run to retry only the failed
+cells.
+
+### 6b. A subset
+
+The launcher supports `--filter_pe`, `--filter_act`, `--filter_dataset`, and a coarser `--grid` switch.
+
+**Pick by PE** (here: only the SH and FKAN cells):
+
+```sh
+python src/run_grid.py --filter_pe sh,fkan
+```
+
+**Pick by activation:**
+
+```sh
+python src/run_grid.py --filter_act relu,scaled_sine
+```
+
+**Pick by dataset:**
+
+```sh
+python src/run_grid.py --filter_dataset etopo1,cmb
+```
+
+**Pick the SH ablation only** (the 6 post-saturation + 9 pre-saturation
+runs, no main grid):
+
+```sh
+python src/run_grid.py --grid sh_ablation
+```
+
+**Combine filters** (set intersection). Run just the SH cells on CMB:
+
+```sh
+python src/run_grid.py --filter_pe sh --filter_dataset cmb
+```
+
+**Plan the run without executing**:
+
+```sh
+python src/run_grid.py --filter_pe sh --filter_dataset cmb --dry_run
+```
+
+**`--grid` choices:**
+
+| `--grid` value         | Cells included                                          |
+|------------------------|----------------------------------------------------------|
+| `main`                 | 75 main-grid cells                                       |
+| `sh_post_saturation`   | 6 cells (3 activations × 2 low-bandwidth datasets)       |
+| `sh_pre_saturation`    | 9 cells (3 activations × 3 high-bandwidth datasets)      |
+| `sh_ablation`          | 15 cells (both SH sub-grids together)                    |
+| `all` (default)        | 90 cells (main + sh_ablation)                            |
+
+### 6c. Copying results back from a borrowed machine
+
+After the borrowed-machine run finishes, copy back **two** things to your
+laptop:
+
+1. `results/runs.csv` — the per-cell PSNR / parameter-count / timing /
+   status table. Append-only on the source machine; you can either replace
+   yours wholesale (if your local CSV is empty) or merge by appending the
+   new rows.
+
+2. `logs/grid/` — the per-cell TensorBoard logs and best-model checkpoints
+   (one `<cell_key>__<dataset>__seedN/ckpt/best_model_*.ckpt` per cell).
+   These are needed if you want to re-evaluate or visualize the trained
+   models later.
+
+Both are gitignored, so a plain `scp -r` or `rsync` works:
+
+```sh
+scp -r friend@host:~/BSPS6/results/runs.csv ./results/
+scp -r friend@host:~/BSPS6/logs/grid/         ./logs/
+```
+
+---
+
+## 7. Analyze the results
+
+Run all four pre-committed analyses (preregistration §2):
+
+```sh
+PYTHONPATH=src python src/analysis/run_analysis.py \
+    --runs_csv results/runs.csv \
+    --output_dir results/analysis
+```
+
+Outputs (under `results/analysis/`):
+
+* `summary.json` — machine-readable summary statistics for each analysis.
+* `summary.md` — human-readable top-level summary.
+* `tables/variance_decomposition.md` — η² per factor + bootstrap CIs.
+* `tables/polar_penalty_contrast.md` — median Δ(angular − cartesian) + CI.
+* `tables/characterization_correlations.md` — Spearman ρ per PE × feature.
+* `tables/sh_lmax_ablation.md` — median Δ for post- and pre-saturation regimes.
+* `figures/*.png` — one figure per analysis (skip with `--skip_figures`).
+
+The analyses are descriptive — every analysis produces a number and a CI,
+which gets reported regardless of direction or magnitude.
+
+---
+
+## 8. Where files live
+
+| Path                                              | Contents                                            | Tracked in git? |
+|---------------------------------------------------|-----------------------------------------------------|-----------------|
+| `src/datasets/files/*_Ice_g_gmt4.grd` etc.        | Raw source files (you download these in §3).        | No              |
+| `src/datasets/files/*_512x1024.nc`                | Pre-processed training NetCDFs (§4 output).          | No              |
+| `src/datasets/files/*_511x1023_held_out.nc`       | Pre-processed held-out NetCDFs (§4 output).          | No              |
+| `results/runs.csv`                                 | One row per training run (PSNR, params, timing).    | No              |
+| `results/param_counts.md`                          | `src/tabulate_params.py` output.                | No              |
+| `results/analysis/summary.json` / `summary.md`     | Top-level analysis outputs (§7).                    | No              |
+| `results/analysis/tables/*.md`                     | Per-analysis tables (§7).                           | No              |
+| `results/analysis/figures/*.png`                   | Per-analysis figures (§7).                          | No              |
+| `logs/grid/<cell_key>__<dataset>__seedN/`         | Per-cell TensorBoard logs.                          | No              |
+| `logs/grid/<cell_key>__<dataset>__seedN/ckpt/`    | Best-checkpoint `*.ckpt` files (one per cell).      | No              |
+| `docs/preregistration.md`                          | Pre-committed design + analyses (the contract).     | Yes             |
+| `src/`, `tests/`                       | Code.                                                | Yes             |
+
+---
+
+## 9. Cross-platform notes
+
+The codebase auto-detects the device via `src/utils/device.py`:
+
+* CUDA (Windows / Linux with NVIDIA) — pin_memory on, 4 DataLoader workers,
+  `torch.set_float32_matmul_precision('high')`, GPU peak-memory tracked in
+  the `peak_gpu_mem_mb` column of `runs.csv`.
+* MPS (Apple Silicon) — pin_memory off, 0 DataLoader workers (fork overhead
+  hurts on macOS), peak-memory column left blank (MPS doesn't expose
+  `max_memory_allocated`).
+* CPU — same conservative defaults as MPS; suitable for smoke tests, not
+  the full grid.
+
+The Lightning Trainer uses the matching `accelerator` automatically. No
+per-platform code paths exist in `main.py` or the analysis scripts.
+
+A run launched on macOS and a run launched on Windows will produce
+bit-different model weights (different RNG streams / kernel choices) but
+the same `runs.csv` schema. You can merge runs.csv rows from both
+platforms; the analysis pipeline treats them uniformly.
+
+---
+
+## 10. Troubleshooting
+
+* **`src/run_grid.py: error: unrecognized arguments: --omega 1024`** —
+  your local copy of `src/config/opts.py` is stale relative to
+  `src/config/architectures.py`. Re-pull the repo and clear
+  `src/config/__pycache__/`.
+* **CUDA out of memory on the SH cells (~2.3 GB coord tensor)** —
+  reduce `--batch_size` from 8192 to 4096 on the affected cell, or run
+  `src/run_grid.py --filter_pe sh --filter_dataset <one_dataset>`
+  separately. Document any per-cell mitigation in `runs.csv`'s
+  `mitigation_note` column.
+* **`held_out_psnr` values look much worse than `reconstruction_psnr`** —
+  expected. The held-out grid samples positions the model never saw during
+  training; the gap quantifies generalization.
+* **Spearman ρ test in §2.3 returns NaN** — n=5 datasets is the absolute
+  floor for the test. Check that all 5 main-grid SH cells (for example)
+  have a `held_out_psnr` value in `runs.csv`.
+
+For anything else, the test suite is the first stop:
+`PYTHONPATH=src python tests/test_<area>.py` will usually pinpoint the
+problem.

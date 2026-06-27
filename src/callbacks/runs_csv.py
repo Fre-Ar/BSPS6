@@ -134,6 +134,7 @@ class RunsCSVLogger(Callback):
     # ----- timing & GPU mem ------------------------------------------------
     def on_train_start(self, trainer, pl_module):
         self._t_start = time.time()
+        # Peak-memory tracking is CUDA-only; MPS / CPU silently skip.
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
@@ -163,6 +164,8 @@ class RunsCSVLogger(Callback):
         self._t_end = time.time()
         wall = (self._t_end - self._t_start) if self._t_start else None
 
+        # CUDA exposes max_memory_allocated; MPS / CPU don't, so the column
+        # is left blank on those backends.
         peak_mb: Optional[float] = None
         if torch.cuda.is_available():
             peak_mb = torch.cuda.max_memory_allocated() / (1024.0 * 1024.0)

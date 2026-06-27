@@ -24,7 +24,6 @@ from typing import Any
 # Matches INR-Bench Coordinate-MLP defaults (Appendix "Network Settings":
 # 6-layer MLP, hidden width 256).
 _MLP_SHAPE: dict[str, Any] = {
-    'arch':            'mlp',
     'mlp_num_layers':  6,
     'mlp_layer_width': 256,
 }

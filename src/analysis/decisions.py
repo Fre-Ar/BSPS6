@@ -49,7 +49,7 @@ LOW_BANDWIDTH_DATASETS = ('era5', 'hdri_sky')                # L_95 < 32
 HIGH_BANDWIDTH_DATASETS = ('etopo1', 'hdri_urban', 'cmb')    # L_95 > 32
 ALL_DATASETS = tuple(DATASET_METRICS.keys())
 
-# SH L_max values used in the grid (matches scripts/run_grid.py).
+# SH L_max values used in the grid (matches src/run_grid.py).
 SH_LMAX_DEFAULT = 32
 SH_LMAX_H5A = {'era5': 13, 'hdri_sky': 31}
 SH_LMAX_H5B = 16
