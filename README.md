@@ -51,7 +51,7 @@ pip install torch
 **Windows with NVIDIA GPU (CUDA 12.1):**
 
 ```sh
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install torch --index-url https://download.pytorch.org/whl/cu132
 ```
 
 For other CUDA versions, see the wheel selector at <https://pytorch.org/get-started/locally/>.

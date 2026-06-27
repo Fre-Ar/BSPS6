@@ -116,10 +116,18 @@ class RunsCSVLogger(Callback):
     Reads end-of-training metrics from `pl_module` (set by ImgRegCoordSystem's
     `on_train_end` — see main.py) and hyperparameters from `pl_module.hparams`.
 
-    Hook firing order in PL:
-        LightningModule.on_train_end → Callback.on_train_end (this hook)
-    So by the time this fires, the reconstruction_* and held_out_* attributes
-    are already populated.
+    Hook firing order in Lightning 2.x for the end of fit:
+
+        Callback.on_train_end (e.g. log handlers)
+        LightningModule.on_train_end   ← populates pl_module.reconstruction_psnr etc.
+        Callback.on_fit_end            ← we write the row HERE
+        LightningModule.on_fit_end
+
+    Writing the row in `on_fit_end` (rather than `on_train_end`) means the
+    LightningModule's `on_train_end` has already run, so the metrics we read
+    via `_safe_metric` are populated. The earlier `on_train_end` version of
+    this callback wrote a NaN-PSNR row before the module's evaluation ran —
+    that's the bug this hook ordering fixes.
     """
 
     def __init__(self, csv_path: str):
@@ -138,7 +146,13 @@ class RunsCSVLogger(Callback):
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-    def on_train_end(self, trainer, pl_module):
+    def on_fit_end(self, trainer, pl_module):
+        # Fires AFTER LightningModule.on_train_end, so end-of-training
+        # evaluation metrics (reconstruction_psnr / held_out_psnr / …) have
+        # been written to `pl_module` by the time we read them.
+        # `_status` may have been flipped to 'eval_failed' by the module's
+        # on_train_end wrapper if end-of-training evaluation raised; in that
+        # case we keep that status (don't overwrite it with 'completed').
         if self._status == 'running':
             self._status = 'completed'
         self._write_row(trainer, pl_module)

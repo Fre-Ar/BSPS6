@@ -53,15 +53,14 @@ class ImgRegCoordSystem(BaseCoordSystem):
 
     def on_validation_epoch_end(self):
         mean_loss = torch.cat([x['val_loss'] for x in self.validation_step_outputs]).mean()
-        mean_psnr = -10*torch.log10(mean_loss)
+        mean_psnr = -10 * torch.log10(mean_loss)
+        # Reshape flat (N, C) → (C, H, W) for TensorBoard image logging.
+        # The H, W come from the dataset itself.
+        H, W = self.dataset.height, self.dataset.width
         gt = torch.cat([x['gt'] for x in self.validation_step_outputs])
-        gt = rearrange(gt, '(h w) c -> c h w',
-                           h=hparams.img_wh[1],
-                           w=hparams.img_wh[0])
+        gt = rearrange(gt, '(h w) c -> c h w', h=H, w=W)
         pred = torch.cat([x['pred'] for x in self.validation_step_outputs])
-        pred = rearrange(pred, '(h w) c -> c h w',
-                             h=hparams.img_wh[1],
-                             w=hparams.img_wh[0])
+        pred = rearrange(pred, '(h w) c -> c h w', h=H, w=W)
 
         self.logger.experiment.add_images('val/gt_pred',
                                           torch.stack([gt, pred]),
@@ -202,18 +201,12 @@ class ImgRegCoordSystem(BaseCoordSystem):
               f"{self.dataset.held_out_width}) = {coords_held.shape[0]} samples")
 
 
-
-
-if __name__ == '__main__':
-    
-    #dataset = SphericalDataset(ELEVATION_DATA_PATH)
-    #print("Dataset length: ", len(dataset))
-    #sample = dataset[0]
-    #print("Sample keys: ", sample.keys())
-    #print("Coordinate shape: ", sample[COORD].shape)
-    #print("Target shape: ", sample[TARGET].shape)
-    
+def main() -> None:
+    """Training entrypoint."""
     hparams = get_opts()
     seed_everything(int(getattr(hparams, 'seed', 42)), workers=True)
     system = ImgRegCoordSystem(hparams)
     run_main(system, hparams)
+
+if __name__ == '__main__':
+   main()

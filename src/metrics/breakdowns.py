@@ -25,7 +25,12 @@ import torch
 def _flat_lats(lats_deg: np.ndarray, width: int) -> torch.Tensor:
     """Expand (H,) lats to a (H*W,) per-pixel latitude vector in row-major
     (h, w) order. All W positions in row h share `lats_deg[h]`."""
-    lats_t = torch.as_tensor(np.asarray(lats_deg), dtype=torch.float32)
+    # `np.array(..., copy=True)` (rather than `np.asarray`) guarantees a
+    # writable copy: xarray's `ds['y'].values` returns a non-writable view
+    # of a memory-mapped NetCDF, and `torch.as_tensor` on a read-only
+    # numpy array warns and may misbehave under later in-place ops.
+    lats_arr = np.array(lats_deg, dtype=np.float32, copy=True)
+    lats_t = torch.from_numpy(lats_arr)
     return lats_t.repeat_interleave(int(width))
 
 

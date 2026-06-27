@@ -67,7 +67,7 @@ def get_opts():
                         help='Batch size (INR-Bench default).')
     parser.add_argument('--lr', type=float, default=4e-4,
                         help='Initial learning rate (INR-Bench default).')
-    parser.add_argument('--num_epochs', type=int, default=1000,
+    parser.add_argument('--num_epochs', type=int, default=100,
                         help='Number of training epochs (INR-Bench default).')
     parser.add_argument('--seed', type=int, default=42,
                         help='Global random seed (preregistration §3.5).')
