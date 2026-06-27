@@ -143,7 +143,7 @@ def test_logger_writes_completed_row_with_metrics() -> None:
 
         hp = _baseline_hparams()
         mod = _StubModule(hp, num_params=123456)
-        # Populate end-of-training metrics as ImgRegCoordSystem.on_train_end would.
+        # Populate end-of-training metrics as ImgRegCoordSystem.on_fit_end would.
         mod.reconstruction_psnr = 35.5
         mod.reconstruction_psnr_polar = 30.1
         mod.reconstruction_psnr_equatorial = 40.7
@@ -154,7 +154,7 @@ def test_logger_writes_completed_row_with_metrics() -> None:
         tr = _StubTrainer(current_epoch=999, log_dir='/tmp/log_dir')
 
         cb.on_train_start(tr, mod)
-        cb.on_train_end(tr, mod)
+        cb.on_fit_end(tr, mod)
 
         rows = _read_rows(csv_path)
         assert len(rows) == 1, f'expected 1 row, got {len(rows)}'
@@ -198,7 +198,7 @@ def test_logger_handles_rgb_channel_metrics() -> None:
 
         tr = _StubTrainer(current_epoch=1000, log_dir='/tmp/x')
         cb.on_train_start(tr, mod)
-        cb.on_train_end(tr, mod)
+        cb.on_fit_end(tr, mod)
 
         r = _read_rows(csv_path)[0]
         assert float(r['reconstruction_psnr_r']) == 31.5
@@ -221,7 +221,7 @@ def test_logger_missing_metrics_become_nan() -> None:
         # No reconstruction_*/held_out_* attributes set on `mod`.
         tr = _StubTrainer(current_epoch=0, log_dir='')
         cb.on_train_start(tr, mod)
-        cb.on_train_end(tr, mod)
+        cb.on_fit_end(tr, mod)
 
         r = _read_rows(csv_path)[0]
         # NaN renders as 'nan' (Python str(float('nan'))) — the analysis
@@ -272,8 +272,8 @@ def test_logger_on_exception_records_failure() -> None:
 
 
 def test_logger_idempotent_write() -> None:
-    """Calling on_train_end twice writes only one row (idempotency)."""
-    print('\n[runs_csv] double on_train_end writes only one row ...')
+    """Calling on_fit_end twice writes only one row (idempotency)."""
+    print('\n[runs_csv] double on_fit_end writes only one row ...')
     with tempfile.TemporaryDirectory() as tmp:
         csv_path = os.path.join(tmp, 'runs.csv')
         cb = RunsCSVLogger(csv_path)
@@ -284,12 +284,12 @@ def test_logger_idempotent_write() -> None:
         tr = _StubTrainer(current_epoch=1000)
 
         cb.on_train_start(tr, mod)
-        cb.on_train_end(tr, mod)
-        cb.on_train_end(tr, mod)  # second call: must be a no-op
+        cb.on_fit_end(tr, mod)
+        cb.on_fit_end(tr, mod)  # second call: must be a no-op
 
         rows = _read_rows(csv_path)
         assert len(rows) == 1, f'expected 1 row, got {len(rows)}'
-        print('  OK exactly one row written despite two on_train_end calls.')
+        print('  OK exactly one row written despite two on_fit_end calls.')
 
 
 def test_logger_encoding_kwargs_json() -> None:
@@ -306,7 +306,7 @@ def test_logger_encoding_kwargs_json() -> None:
         mod = _StubModule(hp, num_params=1)
         tr = _StubTrainer(current_epoch=0)
         cb.on_train_start(tr, mod)
-        cb.on_train_end(tr, mod)
+        cb.on_fit_end(tr, mod)
         r = _read_rows(csv_path)[0]
         parsed = json.loads(r['encoding_kwargs_json'])
         assert parsed == {'L_max': 32}

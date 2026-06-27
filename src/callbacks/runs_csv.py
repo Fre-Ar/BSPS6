@@ -17,12 +17,6 @@ Row contents:
     (main.py) before this callback fires.
   * Bookkeeping — status, parameter_count, wall_clock_seconds,
     peak_gpu_mem_mb, epochs_run, timestamps, log_dir, mitigation_note.
-
-Concurrency:
-  Appends are protected by POSIX fcntl.flock so concurrent launchers don't
-  corrupt the file. Falls back to non-locking append on systems without
-  fcntl (Windows) with a warning — not a deployment concern here, but
-  documented.
 """
 from __future__ import annotations
 

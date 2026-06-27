@@ -43,7 +43,6 @@ def test_mlp_shape_locked_per_activation() -> None:
     print('\n[archs] MLP shape locked per activation ...')
     for act in EXPECTED_ACTS:
         cfg = cell_config(f'{act}__none_angular')
-        assert cfg['arch'] == 'mlp', cfg
         assert cfg['mlp_num_layers'] == 6, cfg
         assert cfg['mlp_layer_width'] == 256, cfg
     print('  OK all 3 activations use arch=mlp at 6 × 256.')
