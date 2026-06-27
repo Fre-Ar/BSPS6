@@ -1,13 +1,14 @@
 """
-Sequential launcher for the BSPS6 100-cell grid.
+Sequential launcher for the BSPS6 grid.
 
 Usage from repo root:
     python src/run_grid.py [--dry_run] [--grid main|h5a|h5b|all]
                                [--retry_all] [--max_runs N] [--seed 42]
 
 The launcher:
-  1. Builds the grid from the locked architectures × encodings × datasets
-     (defined in src/config/architectures.py and src/config/constants.py).
+  1. Builds the grid from the locked (activation × PE) cells + the KAN row
+     defined in src/config/architectures.py, crossed with the 5 datasets in
+     src/config/constants.py.
   2. Reads runs.csv to find cells with status='completed'.
   3. Skips completed cells (unless --retry_all is passed).
   4. Runs the remaining cells sequentially via subprocess to `src/main.py`.
@@ -16,6 +17,14 @@ The grid is 100 runs at 1 seed:
   * Main grid: 4 archs × 4 encodings × 5 datasets × 1 seed                = 80
   * H5a:       SH at ⌈L_95⌉ for ERA5 (L_max=13) and HDRI_sky (L_max=31)   =  8
   * H5b:       SH at L_max=16 for ETOPO1, HDRI_urban, CMB                 = 12
+  
+The grid is 95 runs at 1 seed:
+  * Main grid: 16 cells × 5 datasets × 1 seed                              = 80
+  * H5a: SH at ⌈L_95⌉ for ERA5 (L_max=13) and HDRI_sky (L_max=31),
+         applied to each of the 3 MLP-SH cells (one per activation)        =  6
+  * H5b: SH at L_max=16 for the 3 high-bandwidth datasets
+         (ETOPO1, HDRI_urban, CMB), applied to each of the 3 MLP-SH cells  =  9
+
 
 Resume policy: a cell's row in runs.csv with status='completed' will cause
 that cell to be skipped on the next launcher invocation. Failed runs
@@ -33,52 +42,60 @@ import sys
 import time
 from pathlib import Path
 
-from config.architectures import ARCHITECTURES, architecture_cli_args        # noqa: E402
-from config.constants import CE_CHOICES, DATASET_CHOICES                     # noqa: E402
+from config.architectures import (                                          # noqa: E402
+    ACTIVATIONS, cell_keys, cell_config, cell_cli_args, is_kan_cell,
+)
+from config.constants import DATASET_CHOICES                     # noqa: E402
 
 
 # ----- H5a / H5b specifications (preregistration §3.5) ---------------------
+# The SH MLP cells (one per activation). H5a/H5b are SH-bandwidth ablations,
+# so they only re-run the cells that *use* SH — the KAN row and the other
+# four PE cells are unaffected.
+SH_MLP_CELL_KEYS: tuple[str, ...] = tuple(
+    f'{act_key}__sh' for act_key in ACTIVATIONS
+)
+
 # H5a: SH at ⌈L_95⌉ for low-bandwidth datasets, compared against main-grid
 #      L_max=32 cells.
 H5A_RUNS = (
     {'dataset': 'era5',     'sh_lmax': 13},     # L_95 = 13
     {'dataset': 'hdri_sky', 'sh_lmax': 31},     # L_95 = 31
 )
+
 # H5b: SH at L_max=16 for high-bandwidth datasets, compared against main-grid
 #      L_max=32 cells.
 H5B_DATASETS = ('etopo1', 'hdri_urban', 'cmb')
 H5B_LMAX = 16
 
 
+
 # ---------------------------------------------------------------------------
 # Grid construction
 # ---------------------------------------------------------------------------
 def build_main_grid(seed: int) -> list[dict]:
-    """The 80 main-grid cells: 4 archs × 4 encodings × 5 datasets × 1 seed.
-    Encoding kwargs use the opts.py defaults (locked in preregistration §3.3)."""
+    """The 80 main-grid cells: 16 cells × 5 datasets × 1 seed.
+    Encoding kwargs use the opts.py defaults."""
     cells: list[dict] = []
-    for arch_key in ARCHITECTURES:
-        for ce in CE_CHOICES:
-            for dataset in DATASET_CHOICES:
-                cells.append({
-                    'arch_key': arch_key,
-                    'ce':       ce,
-                    'dataset':  dataset,
-                    'seed':     seed,
-                    'extra_cli': [],
-                    'tag':      'main',
-                })
+    for cell_key in cell_keys():
+        for dataset in DATASET_CHOICES:
+            cells.append({
+                'cell_key': cell_key,
+                'dataset':  dataset,
+                'seed':     seed,
+                'extra_cli': [],
+                'tag':      'main',
+            })
     return cells
 
 
 def build_h5a_grid(seed: int) -> list[dict]:
-    """8 H5a cells: 4 archs × 2 datasets × 1 matched-L_max per dataset."""
+    """6 H5a cells: 3 SH-MLP cells × 2 datasets × 1 matched-L_max per dataset."""
     cells: list[dict] = []
-    for arch_key in ARCHITECTURES:
+    for cell_key in SH_MLP_CELL_KEYS:
         for run in H5A_RUNS:
             cells.append({
-                'arch_key': arch_key,
-                'ce':       'spherical-harmonics',
+                'cell_key': cell_key,
                 'dataset':  run['dataset'],
                 'seed':     seed,
                 'extra_cli': ['--sh_lmax', str(run['sh_lmax'])],
@@ -88,13 +105,12 @@ def build_h5a_grid(seed: int) -> list[dict]:
 
 
 def build_h5b_grid(seed: int) -> list[dict]:
-    """12 H5b cells: 4 archs × 3 high-bandwidth datasets × L_max=16."""
+    """9 H5b cells: 3 SH-MLP cells × 3 high-bandwidth datasets × L_max=16."""
     cells: list[dict] = []
-    for arch_key in ARCHITECTURES:
+    for cell_key in SH_MLP_CELL_KEYS:
         for dataset in H5B_DATASETS:
             cells.append({
-                'arch_key': arch_key,
-                'ce':       'spherical-harmonics',
+                'cell_key': cell_key,
                 'dataset':  dataset,
                 'seed':     seed,
                 'extra_cli': ['--sh_lmax', str(H5B_LMAX)],
@@ -102,18 +118,22 @@ def build_h5b_grid(seed: int) -> list[dict]:
             })
     return cells
 
-
 # ---------------------------------------------------------------------------
 # Cell-identity tuple — matches the columns RunsCSVLogger writes.
 # ---------------------------------------------------------------------------
 def cell_key_from_plan(cell: dict) -> tuple:
     """Canonical identity tuple for a planned cell. Must match
-    cell_key_from_row(row) for the same logical cell."""
-    arch_cfg = ARCHITECTURES[cell['arch_key']]
-    ce = cell['ce']
+    cell_key_from_row(row) for the same logical cell.
 
-    # Parse --flag value pairs back into a dict so we can derive
-    # encoding_kwargs the same way opts.py's _encoding_kwargs_from_hparams does.
+    Tuple shape:
+      (dataset, ce, arch, act, mlp_act, kan_act, pe, seed, encoding_kwargs_json)
+    """
+    cfg = cell_config(cell['cell_key'])
+    ce = cfg.get('ce', '')
+
+    # Parse `extra_cli` (a flat list ['--flag', value, ...]) into a dict so
+    # we can derive encoding_kwargs the same way opts.py's
+    # _encoding_kwargs_from_hparams does.
     extra_dict: dict[str, str] = {}
     extra_cli = cell['extra_cli']
     for i in range(0, len(extra_cli), 2):
@@ -121,7 +141,7 @@ def cell_key_from_plan(cell: dict) -> tuple:
         extra_dict[flag] = extra_cli[i + 1]
 
     if ce == 'spherical-harmonics':
-        ce_kwargs = {'L_max': int(extra_dict.get('sh_lmax', 32))}
+        ce_kwargs = {'L_max': int(extra_dict.get('sh_lmax', cfg.get('sh_lmax', 32)))}
     elif ce == 'spherical-rff':
         ce_kwargs = {
             'num_features': int(extra_dict.get('rff_num_features', 32)),
@@ -135,11 +155,11 @@ def cell_key_from_plan(cell: dict) -> tuple:
     return (
         cell['dataset'],
         ce,
-        arch_cfg.get('arch', ''),
-        arch_cfg.get('act', ''),
-        arch_cfg.get('mlp_act', ''),
-        arch_cfg.get('kan_act', ''),
-        arch_cfg.get('pe', ''),
+        cfg.get('arch', ''),
+        cfg.get('act', ''),
+        cfg.get('mlp_act', ''),
+        cfg.get('kan_act', ''),
+        cfg.get('pe', ''),
         int(cell['seed']),
         ce_json,
     )
@@ -177,8 +197,7 @@ def load_completed_cells(runs_csv: str) -> set[tuple]:
 # ---------------------------------------------------------------------------
 def cell_save_dir(log_root: str, cell: dict) -> str:
     """Per-cell save directory so TB logs don't pile up under version_N."""
-    parts = [cell['arch_key'], cell['ce'], cell['dataset'],
-             f"seed{cell['seed']}"]
+    parts = [cell['cell_key'], cell['dataset'], f"seed{cell['seed']}"]
     if cell['tag'] != 'main':
         parts.append(cell['tag'])
     return os.path.join(log_root, '__'.join(parts))
@@ -186,8 +205,9 @@ def cell_save_dir(log_root: str, cell: dict) -> str:
 
 def describe_cell(cell: dict) -> str:
     extras = ' '.join(cell['extra_cli'])
-    base = (f"{cell['arch_key']:18s} / {cell['ce']:22s} / "
-            f"{cell['dataset']:12s} / seed={cell['seed']}")
+    tag = f" [{cell['tag']}]" if cell['tag'] != 'main' else ''
+    base = (f"{cell['cell_key']:30s} / {cell['dataset']:12s} / "
+            f"seed={cell['seed']}{tag}")
     return f"{base} {extras}" if extras else base
 
 
@@ -201,11 +221,10 @@ def run_cell(cell: dict, log_root: str, runs_csv: str) -> int:
     args = [
         sys.executable, '-u', 'main.py',
         '--dataset', cell['dataset'],
-        '--ce',      cell['ce'],
         '--seed',    str(cell['seed']),
         '--save_dir', save_dir,
         '--runs_csv', runs_csv,
-        *architecture_cli_args(cell['arch_key']),
+        *cell_cli_args(cell['cell_key']),
         *cell['extra_cli'],
     ]
 

@@ -1,31 +1,36 @@
 """
 Unit tests for scripts/run_grid.py — grid construction, cell-key canonicality,
-and resume-detection against a synthetic runs.csv.
+and resume-detection against a synthetic runs.csv (preregistration §3.5).
 
 We do NOT spawn any subprocesses; all assertions are against the grid-building
 and key-derivation logic.
+
+Run from repo root:
+    PYTHONPATH=src python tests/test_run_grid.py
 """
 from __future__ import annotations
 
 import csv
-import json
 import os
 import sys
 import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(REPO_ROOT, 'src'))
+sys.path.insert(0, os.path.join(REPO_ROOT, 'scripts'))
 
 # Import the launcher as a module (it's set up to be importable).
 import importlib.util
 _spec = importlib.util.spec_from_file_location(
-    'run_grid', os.path.join(REPO_ROOT, 'src', 'run_grid.py'),
+    'run_grid', os.path.join(REPO_ROOT, 'scripts', 'run_grid.py'),
 )
 run_grid = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(run_grid)
 
-from config.architectures import ARCHITECTURES                            # noqa: E402
-from config.constants import CE_CHOICES, DATASET_CHOICES                  # noqa: E402
+from config.architectures import (                                       # noqa: E402
+    cell_keys, cell_config, ACTIVATIONS, PE_CELLS, KAN_ROW,
+)
+from config.constants import DATASET_CHOICES                              # noqa: E402
 
 # Minimal column subset for synthetic CSVs: only the columns
 # `cell_key_from_row` reads, plus `status` for resume filtering.
@@ -36,60 +41,85 @@ _TEST_CSV_COLUMNS = (
     'pe', 'seed', 'encoding_kwargs_json', 'status',
 )
 
+# Expected grid sizes post-redesign.
+EXPECTED_N_CELLS = len(ACTIVATIONS) * len(PE_CELLS) + len(KAN_ROW)         # 16
+EXPECTED_MAIN = EXPECTED_N_CELLS * len(DATASET_CHOICES)                    # 80
+EXPECTED_H5A = len(ACTIVATIONS) * 2                                        # 6
+EXPECTED_H5B = len(ACTIVATIONS) * 3                                        # 9
+EXPECTED_TOTAL = EXPECTED_MAIN + EXPECTED_H5A + EXPECTED_H5B               # 95
+
 
 # ---------------------------------------------------------------------------
 # Grid construction
 # ---------------------------------------------------------------------------
 def test_main_grid_size_and_uniqueness() -> None:
-    """Main grid is exactly len(ARCH) × len(CE) × len(DATASETS) cells, unique."""
+    """Main grid = 16 cells × 5 datasets = 80 cells, unique."""
     print('\n[run_grid] main grid: shape & uniqueness ...')
     cells = run_grid.build_main_grid(seed=42)
-    expected = len(ARCHITECTURES) * len(CE_CHOICES) * len(DATASET_CHOICES)
-    assert len(cells) == expected, f'expected {expected} cells, got {len(cells)}'
+    assert len(cells) == EXPECTED_MAIN, (
+        f'expected {EXPECTED_MAIN} cells, got {len(cells)}'
+    )
     keys = {run_grid.cell_key_from_plan(c) for c in cells}
-    assert len(keys) == len(cells), 'duplicate cell keys in main grid'
-    print(f'  OK {expected} cells, all unique (4 archs × {len(CE_CHOICES)} ce × {len(DATASET_CHOICES)} ds).')
+    assert len(keys) == len(cells), 'duplicate cell-identity tuples in main grid'
+    print(f'  OK {EXPECTED_MAIN} cells unique '
+          f'({EXPECTED_N_CELLS} cells × {len(DATASET_CHOICES)} datasets).')
 
 
 def test_h5a_grid_size_and_lmax_values() -> None:
-    """H5a is 4 archs × 2 datasets × 1 L_max each = 8 cells."""
-    print('\n[run_grid] H5a grid: 8 cells with matched L_max ...')
+    """H5a = 3 SH-MLP cells × 2 datasets × 1 matched L_max each = 6 cells."""
+    print('\n[run_grid] H5a grid: matched L_max per dataset ...')
     cells = run_grid.build_h5a_grid(seed=42)
-    assert len(cells) == 8, f'expected 8, got {len(cells)}'
-    # All H5a cells are SH-encoded.
-    assert all(c['ce'] == 'spherical-harmonics' for c in cells)
-    # The L_max values for the two datasets:
-    by_dataset = {}
+    assert len(cells) == EXPECTED_H5A, f'expected {EXPECTED_H5A}, got {len(cells)}'
+    # Every H5a cell is one of the three SH-MLP cells.
+    for c in cells:
+        assert c['cell_key'].endswith('__sh'), c
+    by_dataset: dict[str, set[int]] = {}
     for c in cells:
         lmax_idx = c['extra_cli'].index('--sh_lmax') + 1
         by_dataset.setdefault(c['dataset'], set()).add(int(c['extra_cli'][lmax_idx]))
     assert by_dataset['era5'] == {13}, f'ERA5 L_max: {by_dataset["era5"]}'
     assert by_dataset['hdri_sky'] == {31}, f'HDRI_sky L_max: {by_dataset["hdri_sky"]}'
-    print(f'  OK H5a: ERA5 L_max=13, HDRI_sky L_max=31, 4 archs each.')
+    print(f'  OK H5a: ERA5 L_max=13, HDRI_sky L_max=31, {len(ACTIVATIONS)} '
+          f'activations each.')
 
 
 def test_h5b_grid_size_and_lmax_values() -> None:
-    """H5b is 4 archs × 3 high-bandwidth datasets × L_max=16 = 12 cells."""
-    print('\n[run_grid] H5b grid: 12 cells at L_max=16 ...')
+    """H5b = 3 SH-MLP cells × 3 high-bandwidth datasets × L_max=16 = 9 cells."""
+    print('\n[run_grid] H5b grid: L_max=16 ...')
     cells = run_grid.build_h5b_grid(seed=42)
-    assert len(cells) == 12, f'expected 12, got {len(cells)}'
-    assert all(c['ce'] == 'spherical-harmonics' for c in cells)
-    datasets = {c['dataset'] for c in cells}
-    assert datasets == {'etopo1', 'hdri_urban', 'cmb'}, datasets
+    assert len(cells) == EXPECTED_H5B, f'expected {EXPECTED_H5B}, got {len(cells)}'
     for c in cells:
+        assert c['cell_key'].endswith('__sh'), c
         lmax_idx = c['extra_cli'].index('--sh_lmax') + 1
         assert int(c['extra_cli'][lmax_idx]) == 16
-    print(f'  OK H5b: L_max=16 for ETOPO1, HDRI_urban, CMB, 4 archs each.')
+    datasets = {c['dataset'] for c in cells}
+    assert datasets == {'etopo1', 'hdri_urban', 'cmb'}, datasets
+    print(f'  OK H5b: L_max=16 for ETOPO1, HDRI_urban, CMB, '
+          f'{len(ACTIVATIONS)} activations each.')
 
 
-def test_total_grid_is_100() -> None:
-    """The full grid is 80 + 8 + 12 = 100 cells (preregistration §3.5)."""
+def test_total_grid_is_95() -> None:
+    """The full grid is 80 + 6 + 9 = 95 cells (preregistration §3.5, post-redesign)."""
     print('\n[run_grid] grand total ...')
     n = (len(run_grid.build_main_grid(42))
          + len(run_grid.build_h5a_grid(42))
          + len(run_grid.build_h5b_grid(42)))
-    assert n == 100, f'expected 100, got {n}'
-    print(f'  OK 80 (main) + 8 (H5a) + 12 (H5b) = {n} runs.')
+    assert n == EXPECTED_TOTAL, f'expected {EXPECTED_TOTAL}, got {n}'
+    print(f'  OK {EXPECTED_MAIN} (main) + {EXPECTED_H5A} (H5a) + '
+          f'{EXPECTED_H5B} (H5b) = {n} runs.')
+
+
+def test_main_grid_includes_kan_row() -> None:
+    """The standalone Fourier KAN row must appear in the main grid, once per dataset."""
+    print('\n[run_grid] main grid contains KAN row ...')
+    cells = run_grid.build_main_grid(seed=42)
+    kan_cells = [c for c in cells if c['cell_key'] == 'fourier_kan']
+    assert len(kan_cells) == len(DATASET_CHOICES), (
+        f'expected {len(DATASET_CHOICES)} KAN runs, got {len(kan_cells)}'
+    )
+    datasets = {c['dataset'] for c in kan_cells}
+    assert datasets == set(DATASET_CHOICES)
+    print(f'  OK fourier_kan present for all {len(DATASET_CHOICES)} datasets.')
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +127,6 @@ def test_total_grid_is_100() -> None:
 # ---------------------------------------------------------------------------
 def _row_from_plan(cell: dict) -> dict:
     """Synthetic CSV row matching what RunsCSVLogger would write for this cell."""
-    arch_cfg = ARCHITECTURES[cell['arch_key']]
-    # encoding_kwargs computed exactly the way the launcher's
-    # cell_key_from_plan does (so the round-trip is meaningful).
     key = run_grid.cell_key_from_plan(cell)
     (_, ce, arch, act, mlp_act, kan_act, pe, seed, ce_json) = key
     return {
@@ -122,7 +149,7 @@ def test_cell_key_round_trip_main_grid() -> None:
     for c in run_grid.build_main_grid(seed=42):
         row = _row_from_plan(c)
         assert run_grid.cell_key_from_plan(c) == run_grid.cell_key_from_row(row), c
-    print('  OK 80 main-grid cells round-trip through CSV.')
+    print(f'  OK {EXPECTED_MAIN} main-grid cells round-trip through CSV.')
 
 
 def test_cell_key_round_trip_h5a_h5b() -> None:
@@ -133,30 +160,26 @@ def test_cell_key_round_trip_h5a_h5b() -> None:
         plan_key = run_grid.cell_key_from_plan(c)
         row_key = run_grid.cell_key_from_row(row)
         assert plan_key == row_key, f'mismatch for {c}: plan={plan_key} row={row_key}'
-    print('  OK 8 H5a + 12 H5b cells round-trip through CSV.')
+    print(f'  OK {EXPECTED_H5A} H5a + {EXPECTED_H5B} H5b cells round-trip.')
 
 
 def test_h5a_distinct_from_main_grid_sh_cell() -> None:
     """A main-grid SH cell (L_max=32 default) is a DIFFERENT cell from the
-    H5a matched cell on the same dataset (L_max=13 or 31). They must have
-    distinct cell keys, otherwise resume-detection would skip the H5a run."""
+    H5a matched cell on the same dataset (L_max=13 or 31)."""
     print('\n[run_grid] H5a cells distinct from main-grid SH cells ...')
     main_cells = run_grid.build_main_grid(seed=42)
     h5a_cells = run_grid.build_h5a_grid(seed=42)
-    # Pick the main-grid SH/ERA5 cell and the H5a SH/ERA5 cell — they share
-    # dataset, encoding, architecture, but differ in encoding_kwargs.
-    for arch_key in ARCHITECTURES:
+    for act_key in ACTIVATIONS:
+        cell_key = f'{act_key}__sh'
         main_sh = next(c for c in main_cells
-                       if c['arch_key'] == arch_key
-                       and c['ce'] == 'spherical-harmonics'
-                       and c['dataset'] == 'era5')
+                       if c['cell_key'] == cell_key and c['dataset'] == 'era5')
         h5a_sh = next(c for c in h5a_cells
-                      if c['arch_key'] == arch_key and c['dataset'] == 'era5')
+                      if c['cell_key'] == cell_key and c['dataset'] == 'era5')
         assert (run_grid.cell_key_from_plan(main_sh)
                 != run_grid.cell_key_from_plan(h5a_sh)), (
             f'main {main_sh} and h5a {h5a_sh} collided on the same cell key'
         )
-    print('  OK main-grid (L_max=32) and H5a (L_max=13) are distinct cells.')
+    print('  OK main-grid (L_max=32) and H5a (matched L_max) are distinct cells.')
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +214,6 @@ def test_resume_skips_completed_cells() -> None:
         assert run_grid.cell_key_from_plan(second_failed) not in completed, (
             'failed cells must NOT be treated as completed'
         )
-        # Filter behaviour: only first_complete should be skipped.
         pending = [c for c in main_cells
                    if run_grid.cell_key_from_plan(c) not in completed]
         assert first_complete not in pending
@@ -201,7 +223,7 @@ def test_resume_skips_completed_cells() -> None:
 
 
 def test_resume_empty_csv_runs_everything() -> None:
-    """No runs.csv (or empty completed set) → every cell is pending."""
+    """No runs.csv → every cell is pending."""
     print('\n[run_grid] resume detection: no runs.csv → all pending ...')
     completed = run_grid.load_completed_cells('/no/such/file.csv')
     assert completed == set()
@@ -219,14 +241,12 @@ def test_resume_distinguishes_lmax_variants() -> None:
     main = run_grid.build_main_grid(seed=42)
     h5a = run_grid.build_h5a_grid(seed=42)
 
-    # Pick the main SH/ERA5 cell and the matching H5a SH/ERA5 cell.
     main_sh_era5 = next(c for c in main
-                        if c['ce'] == 'spherical-harmonics'
-                        and c['dataset'] == 'era5'
-                        and c['arch_key'] == 'scaled_sine_mlp')
+                        if c['cell_key'] == 'scaled_sine__sh'
+                        and c['dataset'] == 'era5')
     h5a_sh_era5 = next(c for c in h5a
-                       if c['dataset'] == 'era5'
-                       and c['arch_key'] == 'scaled_sine_mlp')
+                       if c['cell_key'] == 'scaled_sine__sh'
+                       and c['dataset'] == 'era5')
 
     with tempfile.TemporaryDirectory() as tmp:
         csv_path = os.path.join(tmp, 'runs.csv')
@@ -245,15 +265,14 @@ def test_resume_distinguishes_lmax_variants() -> None:
 # ---------------------------------------------------------------------------
 def test_save_dir_includes_tag_for_h5() -> None:
     """The per-cell save dir for H5a/H5b includes the tag so they don't
-    collide with the main-grid SH cell on the same (arch, dataset)."""
+    collide with the main-grid SH cell on the same (cell_key, dataset)."""
     print('\n[run_grid] cell_save_dir distinguishes main / H5a / H5b ...')
     main = next(c for c in run_grid.build_main_grid(42)
-                if c['ce'] == 'spherical-harmonics'
-                and c['dataset'] == 'era5'
-                and c['arch_key'] == 'scaled_sine_mlp')
+                if c['cell_key'] == 'scaled_sine__sh'
+                and c['dataset'] == 'era5')
     h5a = next(c for c in run_grid.build_h5a_grid(42)
-               if c['dataset'] == 'era5'
-               and c['arch_key'] == 'scaled_sine_mlp')
+               if c['cell_key'] == 'scaled_sine__sh'
+               and c['dataset'] == 'era5')
 
     d_main = run_grid.cell_save_dir('logs/grid', main)
     d_h5a = run_grid.cell_save_dir('logs/grid', h5a)
@@ -263,12 +282,11 @@ def test_save_dir_includes_tag_for_h5() -> None:
     print(f'     H5a  → {d_h5a}')
 
 
-def test_describe_cell_contains_arch_and_dataset() -> None:
+def test_describe_cell_contains_cell_key_and_dataset() -> None:
     print('\n[run_grid] describe_cell is human-readable ...')
     c = run_grid.build_main_grid(42)[0]
     s = run_grid.describe_cell(c)
-    assert c['arch_key'] in s
-    assert c['ce'] in s
+    assert c['cell_key'] in s
     assert c['dataset'] in s
     print(f"  OK '{s}'")
 
@@ -278,7 +296,8 @@ def main() -> None:
     test_main_grid_size_and_uniqueness()
     test_h5a_grid_size_and_lmax_values()
     test_h5b_grid_size_and_lmax_values()
-    test_total_grid_is_100()
+    test_total_grid_is_95()
+    test_main_grid_includes_kan_row()
 
     print('\n== Cell-key canonicality ==')
     test_cell_key_round_trip_main_grid()
@@ -292,7 +311,7 @@ def main() -> None:
 
     print('\n== Save dir + helpers ==')
     test_save_dir_includes_tag_for_h5()
-    test_describe_cell_contains_arch_and_dataset()
+    test_describe_cell_contains_cell_key_and_dataset()
 
     print('\nAll run_grid tests passed.')
 

@@ -9,7 +9,10 @@ class GaussianEncoding(nn.Module):
         self.scale = pos_encode_configs['scale_B']
         mapping_input = pos_encode_configs['mapping_input']
         
-        self.B_gauss = torch.randn((mapping_input, in_features), device="cuda") * self.scale
+        self.register_buffer(
+            'B_gauss',
+            torch.randn((mapping_input, in_features)) * self.scale,
+        )
 
         self.out_dim = mapping_input * 2
         # if in_features == 1:

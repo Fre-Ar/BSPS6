@@ -20,6 +20,12 @@ class INR(nn.Module):
             pos_encode_configs = {'type':'gaussian',
                                   'scale_B': hparams.ffn_scale,
                                   'mapping_input': hparams.mapping_input}
+        elif hparams.pe == "FKAN":
+            # FKAN positional encoding (Li et al. 2025, Eq. 6/7).
+            # Output dim 2 · in_features · Ω; (a, b) per (d, ω) trainable.
+            pos_encode_configs = {'type': 'fkan',
+                                  'omega': hparams.omega}
+
 
         in_features = hparams.in_features
         self.pos_encode = pos_encode_configs['type']

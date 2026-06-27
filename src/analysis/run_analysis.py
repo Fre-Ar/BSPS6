@@ -9,8 +9,8 @@ Usage from repo root:
 
 Outputs:
     <output_dir>/decisions.json
-    <output_dir>/tables/{h1,h3,h4,h5_1,h5a,h5b}.md
-    <output_dir>/figures/{h1,h3,h4,h5,h5_1}.png  (unless --skip_figures)
+    <output_dir>/tables/{h1,h3,h4,h5a,h5b}.md
+    <output_dir>/figures/{h1,h3,h4,h5}.png  (unless --skip_figures)
     <output_dir>/summary.md
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ import pandas as pd
  
 from analysis.decisions import (                                          # noqa: E402
     evaluate_h1, evaluate_h3, evaluate_h4,
-    evaluate_h5_1, evaluate_h5a, evaluate_h5b,
+    evaluate_h5a, evaluate_h5b,
 )
 from analysis.characterization import DATASET_METRICS                     # noqa: E402
 
@@ -219,18 +219,19 @@ def write_figures(decisions: dict[str, dict],
     _fig_h4(decisions.get('H4', {}), os.path.join(figures_dir, 'h4.png'), plt)
     _fig_h5_lmax(decisions.get('H5a', {}), decisions.get('H5b', {}),
                  os.path.join(figures_dir, 'h5.png'), plt)
-    _fig_h5_1(decisions.get('H5_1', {}), os.path.join(figures_dir, 'h5_1.png'), plt)
 
 
 def _fig_h1(d: dict, df: pd.DataFrame, path: str, plt) -> None:
-    """Bar chart: mean polar PSNR vs mean equatorial PSNR per encoding."""
+    """Bar chart: mean polar PSNR vs mean equatorial PSNR per PE cell."""
+    from analysis.decisions import _pe_cell_key
     if not d or d.get('decision', '') == 'unknown' or 'held_out_psnr_polar' not in df.columns:
         return
     fig, ax = plt.subplots(figsize=(7, 4))
     sub = df[df['status'] == 'completed'].copy() if 'status' in df.columns else df
     if sub.empty:
         plt.close(fig); return
-    grouped = sub.groupby('ce').agg(
+    sub['pe_cell'] = [_pe_cell_key(c, p) for c, p in zip(sub['ce'], sub['pe'])]
+    grouped = sub.groupby('pe_cell').agg(
         polar=('held_out_psnr_polar', 'mean'),
         equatorial=('held_out_psnr_equatorial', 'mean'),
     )
@@ -243,7 +244,7 @@ def _fig_h1(d: dict, df: pd.DataFrame, path: str, plt) -> None:
     ax.set_xticks(x)
     ax.set_xticklabels(grouped.index, rotation=20, ha='right')
     ax.set_ylabel('held_out PSNR (dB)')
-    ax.set_title(f"H1 — Polar vs equatorial PSNR per encoding "
+    ax.set_title(f"H1 — Polar vs equatorial PSNR per PE cell "
                  f"(decision: {d.get('decision', '?')})")
     ax.legend()
     ax.grid(True, axis='y', alpha=0.3)
@@ -274,17 +275,17 @@ def _fig_h3(d: dict, path: str, plt) -> None:
 
 
 def _fig_h4(d: dict, path: str, plt) -> None:
-    """Scatter of LOO-CV predicted vs observed PSNR, one subplot per encoding."""
-    per_enc = d.get('data', {}).get('per_encoding', {})
-    if not per_enc:
+    """Scatter of LOO-CV predicted vs observed PSNR, one subplot per PE cell."""
+    per_pe = d.get('data', {}).get('per_pe_cell', {})
+    if not per_pe:
         return
-    encodings = [k for k, v in per_enc.items() if v.get('y_true')]
-    if not encodings:
+    pe_cells = [k for k, v in per_pe.items() if v.get('y_true')]
+    if not pe_cells:
         return
-    n = len(encodings)
+    n = len(pe_cells)
     fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 3.5), squeeze=False)
-    for ax, ce in zip(axes[0], encodings):
-        info = per_enc[ce]
+    for ax, pe in zip(axes[0], pe_cells):
+        info = per_pe[pe]
         yt = np.asarray(info['y_true']); yp = np.asarray(info['y_pred'])
         ax.scatter(yp, yt, s=14, alpha=0.7)
         if yt.size > 0:
@@ -297,9 +298,10 @@ def _fig_h4(d: dict, path: str, plt) -> None:
                   if isinstance(ci_lo, float) and isinstance(ci_hi, float)
                   and math.isfinite(ci_lo) and math.isfinite(ci_hi)
                   else "CI n/a")
-        ax.set_title(f"{ce}\nR²={info['r2']:.3f}, {ci_txt}", fontsize=9)
+        ax.set_title(f"{pe}\nR²={info['r2']:.3f}, {ci_txt}", fontsize=9)
         ax.grid(True, alpha=0.3)
-    fig.suptitle(f"H4 — Characterization predicts PSNR (decision: {d.get('decision', '?')})")
+    fig.suptitle(f"H4 — Characterization predicts PSNR per PE cell "
+                 f"(decision: {d.get('decision', '?')})")
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
@@ -315,6 +317,8 @@ def _fig_h5_lmax(d_h5a: dict, d_h5b: dict, path: str, plt) -> None:
 
     if deltas_a:
         df_a = pd.DataFrame(deltas_a)
+        # Earlier schema used 'arch' as the within-dataset key; the
+        # redesigned schema uses 'activation'. Accept either.
         for ds, sub in df_a.groupby('dataset'):
             ax_a.scatter([ds] * len(sub), sub['delta_db'],
                          s=40, label=f"{ds} (L_max={int(sub['lmax_matched'].iloc[0])})")
@@ -340,49 +344,6 @@ def _fig_h5_lmax(d_h5a: dict, d_h5b: dict, path: str, plt) -> None:
     fig.savefig(path, dpi=120)
     plt.close(fig)
 
-
-def _fig_h5_1(d: dict, path: str, plt) -> None:
-    """Scatter of SH_advantage vs −L_95, colored by architecture."""
-    sh_adv = d.get('data', {}).get('sh_advantage_db', {})
-    neg_l95 = d.get('data', {}).get('neg_l95', {})
-    if not sh_adv or not neg_l95:
-        return
-    fig, ax = plt.subplots(figsize=(6, 4))
-    # Keys are stringified tuples like "('mlp', 'etopo1')". Group by arch.
-    points: dict[str, list[tuple[float, float]]] = {}
-    for k_str, adv in sh_adv.items():
-        # k_str could be a tuple repr or a real tuple — handle both.
-        if isinstance(k_str, tuple) and len(k_str) == 2:
-            arch, ds = k_str
-        else:
-            try:
-                arch, ds = eval(k_str) if isinstance(k_str, str) else (None, None)
-            except Exception:
-                continue
-        xv = neg_l95.get(k_str)
-        if xv is None:
-            continue
-        points.setdefault(arch, []).append((float(xv), float(adv)))
-    for arch, pts in points.items():
-        if not pts:
-            continue
-        xs, ys = zip(*pts)
-        ax.scatter(xs, ys, s=30, label=arch, alpha=0.7)
-    ax.set_xlabel('−L_95 (datasets ordered low-to-high bandwidth)')
-    ax.set_ylabel('SH_advantage = PSNR(SH) − PSNR(SRFF) (dB)')
-    rho = d.get('statistic', {}).get('spearman_rho')
-    ax.set_title(f"H5.1 — SH-vs-SRFF crossover "
-                 f"(ρ={rho:.3f} if finite; decision: {d.get('decision', '?')})"
-                 if isinstance(rho, float) and math.isfinite(rho)
-                 else f"H5.1 — SH-vs-SRFF crossover (decision: {d.get('decision', '?')})")
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
-    ax.axhline(0, color='k', lw=0.5)
-    fig.tight_layout()
-    fig.savefig(path, dpi=120)
-    plt.close(fig)
-
-
 # ============================================================================
 # Main
 # ============================================================================
@@ -403,6 +364,15 @@ def main() -> None:
         sys.exit(1)
 
     df = pd.read_csv(args.runs_csv)
+    # pandas' default `na_values` list includes the string 'None', so a CSV
+    # row with `pe=None` (a legitimate value meaning "no positional encoding")
+    # silently round-trips to NaN. That cascades into _pe_cell_key returning
+    # bogus '<ce>_nan' labels and H1/H3/H4 then losing all the
+    # `pe in {none_angular, none_cartesian, sh}` rows. Restore the literal.
+    for col in ('pe', 'ce', 'arch', 'act'):
+        if col in df.columns:
+            df[col] = df[col].fillna('None' if col == 'pe' else '')
+            
     print(f"[run_analysis] Loaded {len(df)} rows from {args.runs_csv}")
     if 'status' in df.columns:
         n_complete = int((df['status'] == 'completed').sum())
@@ -412,7 +382,6 @@ def main() -> None:
         'H1':   evaluate_h1(df),
         'H3':   evaluate_h3(df),
         'H4':   evaluate_h4(df),
-        'H5_1': evaluate_h5_1(df),
         'H5a':  evaluate_h5a(df),
         'H5b':  evaluate_h5b(df),
     }
