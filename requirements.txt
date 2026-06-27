@@ -1,3 +1,13 @@
+# Core dependencies — everything needed to train, evaluate, and analyze
+# runs from already-preprocessed datasets. Installable via
+# `pip install -r requirements.txt` on macOS / Linux / Windows.
+#
+# Source-data preprocessing (CMB FITS → equirectangular NetCDF, HDRI .exr
+# → NetCDF) pulls in C-library deps that don't have Windows wheels on PyPI.
+# Those are split into `requirements-preprocess.txt`. You only need that
+# file if you intend to regenerate the preprocessed *.nc files from raw
+# sources — see SETUP.md.
+
 torch
 numpy
 xarray
@@ -9,5 +19,3 @@ einops
 tensorboard
 pyshtools
 matplotlib
-healpy
-opencv-python

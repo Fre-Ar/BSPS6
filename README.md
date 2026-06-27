@@ -62,6 +62,39 @@ For other CUDA versions, see the wheel selector at <https://pytorch.org/get-star
 pip install -r requirements.txt
 ```
 
+
+This is everything you need to train, evaluate, and analyze runs from the
+already-preprocessed `*.nc` files.
+
+If you also intend to **regenerate the preprocessed NetCDFs from raw
+sources** (§3 + §4), install the preprocessing-only deps on top:
+
+```sh
+pip install -r requirements-preprocess.txt
+```
+
+**Windows caveat:** `healpy` (needed only for the Planck CMB preprocessor)
+has no PyPI wheels for Windows because it wraps the HEALPix C++ library
+and CFITSIO. `pip install -r requirements-preprocess.txt` will fail on
+Windows trying to build healpy from source. Two ways around it:
+
+1. **Conda-forge install (recommended if you want to preprocess on
+   Windows):** create the env with conda, get healpy from conda-forge,
+   then pip-install everything else:
+
+   ```sh
+   conda install -c conda-forge healpy
+   pip install -r requirements.txt
+   pip install opencv-python    # the only other preprocess-only dep
+   ```
+
+2. **Preprocess elsewhere, copy the NetCDFs:** run §3 + §4 on a macOS or
+   Linux machine, then copy `src/datasets/files/*_512x1024.nc` and
+   `src/datasets/files/*_511x1023_held_out.nc` to your Windows box.
+   Training, tests, and analysis on Windows then only need the core
+   `requirements.txt` — no healpy install required.
+
+
 Verify your install picked up the right device:
 
 ```sh
@@ -107,7 +140,9 @@ UTC. The simplest path is to download it via the Copernicus CDS:
    `%USERPROFILE%\.cdsapirc` on Windows).
 3. Use the CDS web UI to download "ERA5 hourly data on single levels" for
    `2m_temperature`, single hour `2023-06-15 12:00`, NetCDF format,
-   geographical area "Whole available region". Or use the `cdsapi` Python
+   geographical area "Whole available region". Or `pip install cdsapi`
+   and use the Python client (the loader doesn't depend on it; we only
+   need the resulting `.nc` file).
    client (already in `requirements.txt`).
 4. Save the resulting `.nc` file as
    `src/datasets/files/ERA5_t2m_2023_06_15_1200.nc`.
@@ -133,6 +168,11 @@ Download the 2k `.exr` files (free under CC0):
 ---
 
 ## 4. Preprocess the datasets
+
+Preprocessing needs the extra dependencies from §2c (`requirements-preprocess.txt`).
+You only need to run this step on whichever machine generates the `.nc`
+files; you can then copy the resulting NetCDFs to any other machine and
+skip §4 there entirely.
 
 Run the preprocessor for all five datasets in one shot:
 
@@ -345,6 +385,12 @@ platforms; the analysis pipeline treats them uniformly.
 
 ## 10. Troubleshooting
 
+* **`pip install -r requirements-preprocess.txt` fails on Windows
+  while building healpy** (errors mentioning `cfitsio`, `chealpix`, or
+  `Microsoft Visual C++`) — healpy has no Windows pip wheels. Use
+  `conda install -c conda-forge healpy` instead, or skip the
+  preprocessing step entirely on Windows and copy the preprocessed
+  NetCDFs over from a macOS / Linux machine (see §2c).
 * **`src/run_grid.py: error: unrecognized arguments: --omega 1024`** —
   your local copy of `src/config/opts.py` is stale relative to
   `src/config/architectures.py`. Re-pull the repo and clear

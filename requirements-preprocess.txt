@@ -1,0 +1,25 @@
+# Source-data preprocessing dependencies. Required ONLY to regenerate the
+# preprocessed *_512x1024.nc and *_511x1023_held_out.nc files from raw
+# sources (Planck CMB FITS, ETOPO1, ERA5, Poly Haven HDRI). Not needed to
+# train, evaluate, or analyze runs once the preprocessed NetCDF files exist.
+#
+# Install on top of the core requirements:
+#     pip install -r requirements.txt -r requirements-preprocess.txt
+#
+# Windows notes
+# -------------
+# `pip install healpy` fails on Windows: healpy wraps the HEALPix C++
+# library and CFITSIO, neither of which ships PyPI wheels for Windows.
+# Two options:
+#
+#   1. Conda env (preprocess on Windows directly):
+#        conda install -c conda-forge healpy
+#      then `pip install` the rest from this file.
+#
+#   2. Preprocess on macOS / Linux and copy the resulting
+#      datasets/files/*.nc files over to the Windows machine. Training,
+#      tests, and analysis only need the core requirements.txt, so a
+#      Windows-only contributor never needs healpy installed.
+healpy
+opencv-python    # Poly Haven HDRI .exr reading (the HDRI preprocessor sets
+                 # OPENCV_IO_ENABLE_OPENEXR=1 automatically)
