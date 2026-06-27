@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from config.architectures import (                                       # noqa: E402
-    ACTIVATIONS, PE_CELLS, DISPLAY_NAMES, INR_BENCH_BASELINES,
+    ACTIVATIONS, PE_CELLS, DISPLAY_NAMES,
     cell_keys, cell_config, cell_cli_args, display_name
 )
 
@@ -89,16 +89,6 @@ def test_rff_locked_values() -> None:
     assert PE_CELLS['rff']['mapping_input'] == 32
     print('  OK RFF σ = 10, mapping_input = 32.')
 
-def test_inr_bench_baselines_confirmed() -> None:
-    """The handful of confirmed INR-Bench Table III baselines are wired in."""
-    print('\n[archs] INR-Bench baselines ...')
-    assert INR_BENCH_BASELINES['scaled_sine__none_angular'] == 44.44
-    assert INR_BENCH_BASELINES['relu__rff'] == 33.65
-    assert INR_BENCH_BASELINES['gaussian__fkan'] == 34.70
-    assert INR_BENCH_BASELINES['fourier_kan'] == 33.56
-    print('  OK confirmed Table III rows wired.')
-
-
 def test_cli_args_well_formed() -> None:
     """CLI args alternate --flag/value and parse cleanly."""
     print('\n[archs] CLI args well-formed ...')
@@ -146,7 +136,6 @@ def main() -> None:
     test_fkan_locked_values()
     test_sh_locked_values()
     test_rff_locked_values()
-    test_inr_bench_baselines_confirmed()
 
     print('\n== CLI args generation ==')
     test_cli_args_well_formed()

@@ -1,44 +1,40 @@
 """
-Per-hypothesis evaluators.
+Per-analysis descriptive evaluators (preregistration §2).
 
-Each `evaluate_hN(df, ...)` consumes a pandas DataFrame containing the
+Each `<analysis_name>(df, ...)` consumes a pandas DataFrame containing the
 runs.csv rows for the relevant cells and returns a `dict` of the form
 
     {
-        'name':       <str>,                  # short hypothesis label
-        'decision':   'accepted' | 'rejected' | 'inconclusive',
-        'reasoning':  <str>,                  # human-readable summary
-        'statistic':  {<name>: <value>, ...}, # observed test statistic(s)
-        'threshold':  {<name>: <value>, ...}, # pre-committed thresholds
+        'name':       <str>,                  # short analysis label
+        'summary':    <str>,                  # human-readable summary string
+        'statistics': {<key>: <value>, ...},  # numerical summaries
+        'data':       <dict-of-arrays>,       # raw per-cell data for figures
         'n':          <int>,                  # sample size used
-        'data':       <dict-of-arrays>,       # raw paired/grouped data for figures
-        'notes':      <str>,                  # caveats or skipped-due-to-missing-data
+        'notes':      <str>,                  # caveats / skipped messages
     }
 
-Decisions are STRICTLY governed by the pre-committed thresholds in
-docs/preregistration.md. The evaluator code is the single source of truth
-for *how* the thresholds are applied; the thresholds themselves are
-hard-coded here so that drift requires a preregistration amendment.
+There is NO `decision` field. The analyses are pre-committed descriptive
+procedures, not hypothesis tests; the output is a numerical summary that
+gets reported as-is, regardless of magnitude or direction. See
+preregistration §2 for the rationale.
 
 Statistical tools:
-  * Paired Wilcoxon — scipy.stats.wilcoxon
-  * Spearman correlation — scipy.stats.spearmanr
-  * OLS regression — manual (X^T X)^-1 X^T y in numpy, no sklearn dep
-  * Bootstrap CIs — numpy resampling
-
-Notes on the (effective) single-seed protocol: every (cell, dataset,
-encoding_kwargs) combination has at most one row in the DataFrame
-(one seed). Hypothesis sample sizes are correspondingly small.
+  * Wilcoxon signed-rank — scipy.stats.wilcoxon (reported as a diagnostic
+    in §2.2 / §2.4, not as a pass/fail gate).
+  * Spearman correlation — scipy.stats.spearmanr.
+  * Bootstrap CIs — numpy resampling.
+  * Variance decomposition via plain η² (SS_factor / SS_total).
 
 Factor structure (preregistration §3.2 / §3.3):
   * activations: ReLU, ScaledSine, Gaussian
   * PE cells:    none_angular, none_cartesian, rff, sh, fkan
-The (activation × PE) Coordinate-MLP cells are the main analysis set.
+The (activation × PE) Coordinate-MLP cells × the 5 datasets are the main
+analysis set. SH cells are additionally evaluated at L_max ∈ {16, ⌈L_95⌉}
+for §2.4.
 """
 from __future__ import annotations
 
 import json
-import math
 from typing import Any, Optional
 
 import numpy as np
@@ -49,9 +45,8 @@ from .characterization import DATASET_METRICS, FEATURE_NAMES
 
 
 # ----- Constants ------------------------------------------------------------
-# H4 / H5a / H5b dataset partitions.
-LOW_BANDWIDTH_DATASETS = ('era5', 'hdri_sky')           # L_95 < 32 → H5a
-HIGH_BANDWIDTH_DATASETS = ('etopo1', 'hdri_urban', 'cmb')  # L_95 > 32 → H5b
+LOW_BANDWIDTH_DATASETS = ('era5', 'hdri_sky')                # L_95 < 32
+HIGH_BANDWIDTH_DATASETS = ('etopo1', 'hdri_urban', 'cmb')    # L_95 > 32
 ALL_DATASETS = tuple(DATASET_METRICS.keys())
 
 # SH L_max values used in the grid (matches scripts/run_grid.py).
@@ -59,31 +54,12 @@ SH_LMAX_DEFAULT = 32
 SH_LMAX_H5A = {'era5': 13, 'hdri_sky': 31}
 SH_LMAX_H5B = 16
 
-# Activation CLI flag values → cell-key activation tokens
+# Activation CLI flag values → cell-key activation tokens.
 ACT_FLAG_TO_KEY = {
     'relu':         'relu',
     'scaled-sine':  'scaled_sine',
     'gaussian':     'gaussian',
 }
-
-# Default thresholds — pre-committed in preregistration.
-H1_ACCEPT_EFFECT_DB = 1.0
-H1_ACCEPT_P = 0.01
-H1_REJECT_EFFECT_DB = 0.3
-
-H3_ACCEPT_RATIO = 2.0
-H3_REJECT_RATIO = 1.0
-
-H4_ACCEPT_R2 = 0.5
-H4_REJECT_R2 = 0.2
-H4_ACCEPT_MIN_PE_CELLS = 3
-H4_REJECT_MIN_PE_CELLS = 3
-
-H5A_ACCEPT_MARGIN_DB = -0.5
-H5A_REJECT_MARGIN_DB = -1.5
-
-H5B_ACCEPT_DELTA_DB = 0.5
-H5B_REJECT_DELTA_DB = 0.0
 
 DEFAULT_BOOTSTRAP_N = 1000
 DEFAULT_BOOTSTRAP_RNG_SEED = 42
@@ -93,8 +69,7 @@ DEFAULT_BOOTSTRAP_RNG_SEED = 42
 # Cell-selection helpers
 # ============================================================================
 def _parse_lmax(json_str: str) -> Optional[int]:
-    """Pull L_max out of an encoding_kwargs_json string. Returns None if the
-    column isn't an SH kwargs object."""
+    """Pull L_max out of an encoding_kwargs_json string."""
     try:
         d = json.loads(json_str)
     except (json.JSONDecodeError, TypeError):
@@ -104,18 +79,14 @@ def _parse_lmax(json_str: str) -> Optional[int]:
 
 
 def _completed(df: pd.DataFrame) -> pd.DataFrame:
-    """Only rows with status='completed'. Other rows (oom/nan/etc.) are
-    excluded from every analysis."""
+    """Only rows with status='completed'."""
     if 'status' not in df.columns:
         return df
     return df[df['status'] == 'completed'].copy()
 
-def _pe_cell_key(ce: str, pe: str) -> str:
-    """Map (ce, pe) → the PE cell-key used by the redesigned grid.
 
-    See src/config/architectures.py PE_CELLS. Unknown combinations fall
-    through to a generic '<ce>_<pe>' so analyses still run on partial data.
-    """
+def _pe_cell_key(ce: str, pe: str) -> str:
+    """Map (ce, pe) → PE cell-key (see config/architectures.py PE_CELLS)."""
     table = {
         ('angular',              'None'): 'none_angular',
         ('cartesian',            'None'): 'none_cartesian',
@@ -127,19 +98,15 @@ def _pe_cell_key(ce: str, pe: str) -> str:
 
 
 def _add_cell_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Augment df with derived columns:
-      * 'pe_cell':    PE cell-key from (ce, pe)
-      * 'activation': activation cell-key from `act`
-    Returns a copy.
-    """
+    """Augment df with derived 'pe_cell' and 'activation' columns. Copy."""
     df = df.copy()
     df['pe_cell'] = [_pe_cell_key(c, p) for c, p in zip(df['ce'], df['pe'])]
     df['activation'] = df['act'].map(ACT_FLAG_TO_KEY).fillna(df['act'])
     return df
 
+
 def _main_grid_cells(df: pd.DataFrame) -> pd.DataFrame:
-    """Completed main-grid cells. For SH, only the L_max=SH_LMAX_DEFAULT
-    cells qualify; H5a/H5b SH variants live in `_sh_cells_at_lmax`."""
+    """Completed main-grid cells (SH cells filtered to L_max=SH_LMAX_DEFAULT)."""
     df = _completed(df)
     df = _add_cell_columns(df)
     sh_mask = df['pe_cell'] == 'sh'
@@ -149,8 +116,9 @@ def _main_grid_cells(df: pd.DataFrame) -> pd.DataFrame:
         return df[keep].copy()
     return df
 
+
 def _sh_cells_at_lmax(df: pd.DataFrame, lmax: int) -> pd.DataFrame:
-    """SH rows with the given L_max (used by the H5a/H5b sub-grid analyses)."""
+    """SH rows with the given L_max (used by §2.4 sub-grid analyses)."""
     df = _completed(df)
     df = _add_cell_columns(df)
     if 'encoding_kwargs_json' not in df.columns:
@@ -159,33 +127,185 @@ def _sh_cells_at_lmax(df: pd.DataFrame, lmax: int) -> pd.DataFrame:
     mask = (df['pe_cell'] == 'sh') & (parsed == lmax)
     return df[mask].copy()
 
-# ============================================================================
-# H1 — Polar singularities (subsection of H3.1)
-# ============================================================================
-def evaluate_h1(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
-    """`none_angular` exhibits a larger polar penalty than `none_cartesian`.
 
-    The cleanest in-grid contrast: both cells feed raw coordinates to a
-    Coordinate-MLP with no PE; the only difference is the base coordinate
-    system. Paired by (activation, dataset) → activations × datasets obs.
+# ============================================================================
+# Generic helpers
+# ============================================================================
+def _bootstrap_median_ci(
+    values: np.ndarray,
+    n_boot: int = DEFAULT_BOOTSTRAP_N,
+    seed: int = DEFAULT_BOOTSTRAP_RNG_SEED,
+    alpha: float = 0.05,
+) -> tuple[float, float]:
+    """95% bootstrap CI of the sample median by row-resampling with replacement."""
+    if values.size == 0:
+        return (float('nan'), float('nan'))
+    rng = np.random.default_rng(seed)
+    n = values.size
+    medians = np.empty(n_boot, dtype=np.float64)
+    for i in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        medians[i] = float(np.median(values[idx]))
+    return (
+        float(np.percentile(medians, 100 * alpha / 2)),
+        float(np.percentile(medians, 100 * (1 - alpha / 2))),
+    )
 
-    Test variable:
-        Δ_i = polar_penalty(none_angular)_i − polar_penalty(none_cartesian)_i
-    where polar_penalty(i) = equatorial_PSNR(i) − polar_PSNR(i) for cell i.
+
+def _missing_data(name: str, missing: set) -> dict:
+    return {
+        'name': name,
+        'summary': f'Insufficient data; missing: {sorted(missing)}',
+        'statistics': {},
+        'data': {},
+        'n': 0,
+        'notes': 'skipped due to missing data',
+    }
+
+
+# ============================================================================
+# 2.1 Variance decomposition (PE vs. activation vs. dataset)
+# ============================================================================
+def _eta_squared(values: np.ndarray, factors: dict[str, np.ndarray]) -> dict[str, float]:
+    """Plain η² = SS_factor / SS_total for each factor in `factors`.
+    Bounded in [0, 1] for one-factor designs; sums can exceed 1 in unbalanced
+    or bootstrap-resampled designs (we do not clamp)."""
+    n = values.size
+    grand_mean = float(values.mean())
+    ss_total = float(((values - grand_mean) ** 2).sum())
+    out: dict[str, float] = {}
+    for name, codes in factors.items():
+        levels = pd.unique(codes)
+        ss = 0.0
+        for lvl in levels:
+            mask = codes == lvl
+            n_l = int(mask.sum())
+            if n_l == 0:
+                continue
+            ss += n_l * (values[mask].mean() - grand_mean) ** 2
+        out[name] = float(ss / ss_total) if ss_total > 0 else 0.0
+    return out
+
+
+def _bootstrap_eta_and_diffs(
+    values: np.ndarray,
+    factors: dict[str, np.ndarray],
+    n_boot: int = DEFAULT_BOOTSTRAP_N,
+    seed: int = DEFAULT_BOOTSTRAP_RNG_SEED,
+) -> tuple[dict[str, tuple[float, float]], dict[str, tuple[float, float]]]:
+    """Bootstrap 95% CIs for each factor's η² and for the three pairwise diffs.
+
+    Returns (per_factor_ci, diff_ci). diff_ci keys are
+    'pe_minus_activation', 'pe_minus_dataset', 'activation_minus_dataset'.
     """
+    rng = np.random.default_rng(seed)
+    n = values.size
+    factor_names = list(factors.keys())
+    samples: dict[str, list[float]] = {k: [] for k in factor_names}
+    diff_samples: dict[str, list[float]] = {
+        'pe_minus_activation':       [],
+        'pe_minus_dataset':          [],
+        'activation_minus_dataset':  [],
+    }
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        boot_factors = {k: v[idx] for k, v in factors.items()}
+        eta = _eta_squared(values[idx], boot_factors)
+        for k in factor_names:
+            samples[k].append(eta.get(k, 0.0))
+        diff_samples['pe_minus_activation'].append(
+            eta.get('pe', 0.0) - eta.get('activation', 0.0)
+        )
+        diff_samples['pe_minus_dataset'].append(
+            eta.get('pe', 0.0) - eta.get('dataset', 0.0)
+        )
+        diff_samples['activation_minus_dataset'].append(
+            eta.get('activation', 0.0) - eta.get('dataset', 0.0)
+        )
+
+    def _ci(vals: list[float]) -> tuple[float, float]:
+        arr = np.asarray(vals)
+        return (float(np.percentile(arr, 2.5)), float(np.percentile(arr, 97.5)))
+
+    return (
+        {k: _ci(samples[k]) for k in factor_names},
+        {k: _ci(diff_samples[k]) for k in diff_samples},
+    )
+
+
+def variance_decomposition(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
+    """§2.1 — Decompose PSNR variance over {pe, activation, dataset}.
+
+    Reports per-factor η² with bootstrap CIs and the three pairwise difference
+    CIs. No accept/reject; the magnitudes are the finding.
+    """
+    if not {metric, 'ce', 'pe', 'act', 'dataset'}.issubset(df.columns):
+        missing = {metric, 'ce', 'pe', 'act', 'dataset'} - set(df.columns)
+        return _missing_data('variance_decomposition', missing)
+    sub = _main_grid_cells(df)
+    sub = sub.dropna(subset=[metric]).copy()
+    if len(sub) < 8:
+        return _missing_data('variance_decomposition', {'enough_cells'})
+
+    values = sub[metric].to_numpy(dtype=float)
+    factors = {
+        'pe':         sub['pe_cell'].to_numpy(),
+        'activation': sub['activation'].to_numpy(),
+        'dataset':    sub['dataset'].to_numpy(),
+    }
+    eta = _eta_squared(values, factors)
+    per_factor_ci, diff_ci = _bootstrap_eta_and_diffs(values, factors)
+
+    summary = (
+        f"η²: pe={eta['pe']:.3f} "
+        f"(CI {per_factor_ci['pe'][0]:.3f}–{per_factor_ci['pe'][1]:.3f}), "
+        f"activation={eta['activation']:.3f} "
+        f"(CI {per_factor_ci['activation'][0]:.3f}–{per_factor_ci['activation'][1]:.3f}), "
+        f"dataset={eta['dataset']:.3f} "
+        f"(CI {per_factor_ci['dataset'][0]:.3f}–{per_factor_ci['dataset'][1]:.3f})."
+    )
+
+    return {
+        'name': '2.1 variance decomposition (PE vs activation vs dataset)',
+        'summary': summary,
+        'statistics': {
+            'eta_sq_pe':         eta['pe'],
+            'eta_sq_activation': eta['activation'],
+            'eta_sq_dataset':    eta['dataset'],
+            'ci_pe':             per_factor_ci['pe'],
+            'ci_activation':     per_factor_ci['activation'],
+            'ci_dataset':        per_factor_ci['dataset'],
+            'diff_ci_pe_minus_activation':      diff_ci['pe_minus_activation'],
+            'diff_ci_pe_minus_dataset':         diff_ci['pe_minus_dataset'],
+            'diff_ci_activation_minus_dataset': diff_ci['activation_minus_dataset'],
+        },
+        'n': int(values.size),
+        'data': {
+            'eta_sq': eta,
+            'ci':     {k: list(v) for k, v in per_factor_ci.items()},
+            'diff_ci': {k: list(v) for k, v in diff_ci.items()},
+        },
+        'notes': '',
+    }
+
+
+# ============================================================================
+# 2.2 Polar-penalty contrast (none_angular vs none_cartesian)
+# ============================================================================
+def polar_penalty_contrast(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
+    """§2.2 — Paired difference of polar penalty (none_angular − none_cartesian),
+    paired by (activation, dataset)."""
     polar_col = f'{metric}_polar'
     eq_col = f'{metric}_equatorial'
-    needed_cols = {polar_col, eq_col, 'ce', 'pe', 'dataset', 'act'}
-    if missing := (needed_cols - set(df.columns)):
-        return _missing_data_decision('H1', missing)
+    needed = {polar_col, eq_col, 'ce', 'pe', 'dataset', 'act'}
+    if missing := (needed - set(df.columns)):
+        return _missing_data('polar_penalty_contrast', missing)
 
     main = _main_grid_cells(df)
     if len(main) == 0:
-        return _missing_data_decision('H1', {'main_grid_cells'})
+        return _missing_data('polar_penalty_contrast', {'main_grid_cells'})
 
     main['polar_penalty'] = main[eq_col] - main[polar_col]
-
-    # Pivot: rows = (activation, dataset), columns = pe_cell.
     pivot = main.pivot_table(
         index=['activation', 'dataset'],
         columns='pe_cell',
@@ -193,55 +313,45 @@ def evaluate_h1(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
         aggfunc='first',
     )
     if 'none_angular' not in pivot.columns or 'none_cartesian' not in pivot.columns:
-        return _missing_data_decision(
-            'H1', {'none_angular', 'none_cartesian'}
+        return _missing_data(
+            'polar_penalty_contrast', {'none_angular', 'none_cartesian'},
         )
-
     delta = (pivot['none_angular'] - pivot['none_cartesian']).dropna()
     if len(delta) < 2:
-        return _missing_data_decision('H1', {'enough_paired_observations'})
+        return _missing_data('polar_penalty_contrast', {'paired_observations'})
 
     median = float(delta.median())
-    # Guard against the all-(near-)zero case: scipy's z-score normalization
-    # divides by the rank-sum standard error, which is 0 when every paired
-    # observation rounds to zero. The null world hits this exactly. Treat
-    # as "no signal" rather than crashing or emitting a warning.
+    ci_lo, ci_hi = _bootstrap_median_ci(delta.values)
+
+    # Wilcoxon as a diagnostic only (NOT a pass/fail criterion). Guard against
+    # the all-zero case (the null world's signature).
     if np.allclose(delta.values, 0.0, atol=1e-12):
+        wstat = 0.0
         pvalue = 1.0
-        stat = 0.0
     else:
         try:
-            wstat = stats.wilcoxon(delta.values, alternative='greater',
-                                   zero_method='wilcox')
-            pvalue = float(wstat.pvalue)
-            stat = float(wstat.statistic)
-        except ValueError as e:
-            return _err_decision('H1', f'wilcoxon failed: {e}')
+            w = stats.wilcoxon(delta.values, alternative='greater',
+                               zero_method='wilcox')
+            wstat = float(w.statistic)
+            pvalue = float(w.pvalue)
+        except ValueError:
+            wstat = float('nan')
+            pvalue = float('nan')
 
-    if median > H1_ACCEPT_EFFECT_DB and pvalue < H1_ACCEPT_P:
-        decision = 'accepted'
-    elif median < H1_REJECT_EFFECT_DB:
-        decision = 'rejected'
-    else:
-        decision = 'inconclusive'
+    summary = (
+        f'median Δ(none_angular − none_cartesian) = {median:.3f} dB '
+        f'(95% bootstrap CI {ci_lo:.3f}–{ci_hi:.3f}; n={len(delta)}). '
+        f'Wilcoxon W = {wstat:.2f}, p = {pvalue:.4f} (diagnostic only).'
+    )
 
     return {
-        'name': 'H1 — polar singularities (none_angular > none_cartesian)',
-        'decision': decision,
-        'reasoning': (
-            f'median Δ(polar penalty) = {median:.3f} dB; '
-            f'Wilcoxon W = {stat:.2f}, p = {pvalue:.4f}. '
-            f'Accept if median > {H1_ACCEPT_EFFECT_DB} dB and p < {H1_ACCEPT_P}.'
-        ),
-        'statistic': {
-            'median_delta_db': median,
-            'wilcoxon_W': stat,
-            'p_value': pvalue,
-        },
-        'threshold': {
-            'accept_median_db_gt': H1_ACCEPT_EFFECT_DB,
-            'accept_p_lt':         H1_ACCEPT_P,
-            'reject_median_db_lt': H1_REJECT_EFFECT_DB,
+        'name': '2.2 polar-penalty contrast (none_angular vs none_cartesian)',
+        'summary': summary,
+        'statistics': {
+            'median_delta_db':    median,
+            'ci_median_delta_db': (ci_lo, ci_hi),
+            'wilcoxon_W':         wstat,
+            'wilcoxon_p_value':   pvalue,
         },
         'n': int(len(delta)),
         'data': {
@@ -252,553 +362,243 @@ def evaluate_h1(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
 
 
 # ============================================================================
-# H3 — Variance decomposition: PE vs activation vs dataset
+# 2.3 Characterization correlations (Spearman per PE cell × feature)
 # ============================================================================
-def _eta_squared(values: np.ndarray, factors: dict[str, np.ndarray]) -> dict:
-    """Compute (plain) η² for each factor in `factors`.
-
-    For a balanced one-factor ANOVA, η²(F) = SS_between(F) / SS_total ∈ [0, 1].
-    SS_between(F) = Σ_levels n_level · (mean_level − grand_mean)².
-
-    We compute SS_between per factor independently. For balanced multi-factor
-    designs without interactions, the per-factor SS values are additive
-    (SS_total = Σ SS_factor + SS_residual); for unbalanced or bootstrap-
-    resampled designs they need not be, in which case Σ η²_factor can
-    exceed 1. We do NOT clamp — H3's downstream test uses the *difference*
-    η²(pe) − η²(activation), which is well-behaved even in degenerate
-    samples.
-    """
-    n = values.size
-    grand_mean = float(values.mean())
-    ss_total = float(((values - grand_mean) ** 2).sum())
-
-    eta_sq: dict[str, float] = {}
-    ss_per_factor: dict[str, float] = {}
-
-    for name, codes in factors.items():
-        levels = pd.unique(codes)
-        ss = 0.0
-        for lvl in levels:
-            mask = codes == lvl
-            n_l = int(mask.sum())
-            if n_l == 0:
-                continue
-            ss += n_l * (values[mask].mean() - grand_mean) ** 2
-        ss_per_factor[name] = float(ss)
-        eta_sq[name] = float(ss / ss_total) if ss_total > 0 else 0.0
-
-    return {
-        'eta_sq': eta_sq,
-        'ss_per_factor': ss_per_factor,
-        'ss_total': ss_total,
-        'n': int(n),
-    }
-
-
-def _bootstrap_eta_sq_and_diff(
-    values: np.ndarray, factors: dict[str, np.ndarray],
-    diff_factors: tuple[str, str] = ('pe', 'activation'),
+def _bootstrap_spearman_ci(
+    x: np.ndarray, y: np.ndarray,
     n_boot: int = DEFAULT_BOOTSTRAP_N,
     seed: int = DEFAULT_BOOTSTRAP_RNG_SEED,
-) -> tuple[dict[str, tuple[float, float]], tuple[float, float], list[float]]:
-    """95% bootstrap CIs for each factor's η² and for the difference
-    η²(diff_factors[0]) − η²(diff_factors[1]). Returns
-    (per_factor_ci, diff_ci, diff_samples)."""
+) -> tuple[float, float]:
+    """95% bootstrap CI of Spearman ρ by resampling (x, y) pairs."""
+    if x.size < 3 or y.size < 3:
+        return (float('nan'), float('nan'))
     rng = np.random.default_rng(seed)
-    n = values.size
-    samples: dict[str, list[float]] = {k: [] for k in factors}
-    diff_samples: list[float] = []
-    for _ in range(n_boot):
+    n = x.size
+    rhos = np.empty(n_boot, dtype=np.float64)
+    for i in range(n_boot):
         idx = rng.integers(0, n, size=n)
-        boot_vals = values[idx]
-        boot_factors = {k: v[idx] for k, v in factors.items()}
-        result = _eta_squared(boot_vals, boot_factors)
-        for k, v in result['eta_sq'].items():
-            samples[k].append(v)
-        a = result['eta_sq'].get(diff_factors[0], 0.0)
-        b = result['eta_sq'].get(diff_factors[1], 0.0)
-        diff_samples.append(a - b)
-
-    per_factor_ci: dict[str, tuple[float, float]] = {}
-    for k, vals in samples.items():
-        arr = np.asarray(vals)
-        per_factor_ci[k] = (float(np.percentile(arr, 2.5)),
-                            float(np.percentile(arr, 97.5)))
-    arr_diff = np.asarray(diff_samples)
-    diff_ci = (float(np.percentile(arr_diff, 2.5)),
-               float(np.percentile(arr_diff, 97.5)))
-    return per_factor_ci, diff_ci, diff_samples
+        xi, yi = x[idx], y[idx]
+        # If all xi or all yi happen to coincide, Spearman is undefined; skip.
+        if np.all(xi == xi[0]) or np.all(yi == yi[0]):
+            rhos[i] = np.nan
+            continue
+        rho_b, _ = stats.spearmanr(xi, yi)
+        rhos[i] = rho_b
+    rhos = rhos[~np.isnan(rhos)]
+    if rhos.size == 0:
+        return (float('nan'), float('nan'))
+    return (float(np.percentile(rhos, 2.5)), float(np.percentile(rhos, 97.5)))
 
 
-def evaluate_h3(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
-    """Variance decomposition: PE vs activation vs dataset.
-    
-    Operates on the (activation × PE × dataset) main-grid Coordinate-MLP
-    cells.
-
-    Tests "PE dominates activation" via two conditions:
-      1. Point ratio η²(pe) / η²(activation) ≥ 2.0.
-      2. 95% bootstrap CI of the difference η²(pe) - η²(activation)
-         excludes 0.
-    """
-    if not {metric, 'ce', 'pe', 'act', 'dataset'}.issubset(df.columns):
-        missing = {metric, 'ce', 'pe', 'act', 'dataset'} - set(df.columns)
-        return _missing_data_decision('H3', missing)
+def characterization_correlations(
+    df: pd.DataFrame,
+    metric: str = 'held_out_psnr',
+) -> dict:
+    """§2.3 — Spearman rank correlation of per-dataset mean PSNR vs each of
+    (L_95, CV, P99_norm), computed per PE cell. 5 PEs × 3 features = 15
+    correlations + bootstrap CIs + uncorrected Spearman p-values."""
+    needed = {metric, 'ce', 'pe', 'act', 'dataset'}
+    if missing := (needed - set(df.columns)):
+        return _missing_data('characterization_correlations', missing)
     sub = _main_grid_cells(df)
     sub = sub.dropna(subset=[metric]).copy()
     if len(sub) < 8:
-        return _missing_data_decision('H3', {'enough_cells'})
+        return _missing_data('characterization_correlations', {'enough_cells'})
 
-    values = sub[metric].to_numpy(dtype=float)
-    factors = {
-        'pe':         sub['pe_cell'].to_numpy(),
-        'activation': sub['activation'].to_numpy(),
-        'dataset':    sub['dataset'].to_numpy(),
-    }
-    point = _eta_squared(values, factors)
-    per_factor_ci, diff_ci, _diff_samples = _bootstrap_eta_sq_and_diff(
-        values, factors, diff_factors=('pe', 'activation'),
+    # Mean PSNR over activations per (pe_cell, dataset).
+    grouped = (
+        sub.groupby(['pe_cell', 'dataset'])[metric].mean().reset_index()
     )
 
-    eta_pe = point['eta_sq']['pe']
-    eta_act = point['eta_sq']['activation']
-    ratio = (eta_pe / eta_act) if eta_act > 0 else float('inf')
-    diff_lo, diff_hi = diff_ci
-    diff_excludes_zero = diff_lo > 0.0
+    per_pe: dict[str, dict[str, dict]] = {}
+    summary_lines: list[str] = []
 
-    if ratio >= H3_ACCEPT_RATIO and diff_excludes_zero:
-        decision = 'accepted'
-    elif ratio < H3_REJECT_RATIO or eta_act > eta_pe:
-        decision = 'rejected'
-    else:
-        decision = 'inconclusive'
-
-    return {
-        'name': 'H3 — PE dominates activation (variance decomp on MLP grid)',
-        'decision': decision,
-        'reasoning': (
-            f'η²: pe={eta_pe:.3f} '
-            f'(CI {per_factor_ci["pe"][0]:.3f}–{per_factor_ci["pe"][1]:.3f}), '
-            f'activation={eta_act:.3f} '
-            f'(CI {per_factor_ci["activation"][0]:.3f}'
-            f'–{per_factor_ci["activation"][1]:.3f}); '
-            f'ratio η²(pe)/η²(act) = {ratio:.2f}; '
-            f'Δη² CI = [{diff_lo:.3f}, {diff_hi:.3f}]. '
-            f'Accept if ratio ≥ {H3_ACCEPT_RATIO} and Δη² CI excludes 0.'
-        ),
-        'statistic': {
-            'eta_sq_pe':           eta_pe,
-            'eta_sq_activation':   eta_act,
-            'eta_sq_dataset':      point['eta_sq']['dataset'],
-            'ci_pe':               per_factor_ci['pe'],
-            'ci_activation':       per_factor_ci['activation'],
-            'ci_dataset':          per_factor_ci['dataset'],
-            'ratio_pe_over_act':   ratio,
-            'diff_eta_ci':         diff_ci,
-            'diff_excludes_zero':  diff_excludes_zero,
-        },
-        'threshold': {
-            'accept_ratio_ge':     H3_ACCEPT_RATIO,
-            'accept_diff_lo_gt_0': True,
-            'reject_ratio_lt':     H3_REJECT_RATIO,
-        },
-        'n': point['n'],
-        'data': {
-            'eta_sq':  point['eta_sq'],
-            'ci':      {k: list(v) for k, v in per_factor_ci.items()},
-            'diff_ci': list(diff_ci),
-        },
-        'notes': '',
-    }
-
-
-# ============================================================================
-# H4 — Characterization predicts PE performance
-# ============================================================================
-def _ols_fit(X: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Solve (X^T X)^-1 X^T y. Returns coefficient vector."""
-    return np.linalg.lstsq(X, y, rcond=None)[0]
-
-
-def _build_design_matrix(
-    df: pd.DataFrame,
-    feature_names: tuple[str, ...] = FEATURE_NAMES,
-    activation_dummies: bool = True,
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Construct design matrix (X, y) for the H4 regression.
-       Returns X (n × k), y (n,), and column labels."""
-    feats: list[np.ndarray] = []
-    labels: list[str] = []
-
-    # Intercept
-    feats.append(np.ones(len(df)))
-    labels.append('intercept')
-
-    # Continuous dataset-level features
-    for fname in feature_names:
-        col = np.array([DATASET_METRICS[d][fname] for d in df['dataset']],
-                       dtype=float)
-        feats.append(col)
-        labels.append(fname)
-
-    # Activation dummies (drop one for reference category to avoid singular X).
-    if activation_dummies and 'activation' in df.columns:
-        acts = sorted(df['activation'].unique())
-        for a in acts[1:]:
-            feats.append((df['activation'] == a).to_numpy(dtype=float))
-            labels.append(f'activation={a}')
-
-    X = np.column_stack(feats)
-    y = df['held_out_psnr'].to_numpy(dtype=float)
-    return X, y, labels
-
-
-def _loo_cv_r2(df: pd.DataFrame) -> tuple[float, np.ndarray, np.ndarray]:
-    """Leave-one-dataset-out cross-validated R² for the H4 regression.
-       Returns (R², y_true, y_pred) where the prediction arrays cover the full
-       sample (each row predicted by a model trained without its dataset)."""
-    datasets = sorted(df['dataset'].unique())
-    preds = np.zeros(len(df))
-    true = np.zeros(len(df))
-    df = df.reset_index(drop=True)
-    for ds in datasets:
-        train_idx = df.index[df['dataset'] != ds].to_numpy()
-        test_idx = df.index[df['dataset'] == ds].to_numpy()
-        if len(train_idx) == 0 or len(test_idx) == 0:
-            continue
-        X_train, y_train, labels = _build_design_matrix(df.iloc[train_idx])
-        beta = _ols_fit(X_train, y_train)
-        X_test, y_test, _ = _build_design_matrix(df.iloc[test_idx])
-        # Align test columns to training columns (activation dummies may
-        # differ between folds if a held-out fold has an activation not
-        # present in the training fold — won't happen with 3 activations ×
-        # 5 datasets but we handle it gracefully).
-        if X_test.shape[1] != X_train.shape[1]:
-            X_test = _align_design_matrix(df.iloc[test_idx], labels)
-        preds[test_idx] = X_test @ beta
-        true[test_idx] = y_test
-
-    if true.size == 0:
-        return float('nan'), np.array([]), np.array([])
-    ss_res = float(((true - preds) ** 2).sum())
-    ss_tot = float(((true - true.mean()) ** 2).sum())
-    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float('nan')
-    return r2, true, preds
-
-
-def _align_design_matrix(df: pd.DataFrame, training_labels: list[str]) -> np.ndarray:
-    """Build a design matrix for `df` using exactly the column ordering of
-    `training_labels`. Missing activation columns become all-zeros."""
-    cols = []
-    for lbl in training_labels:
-        if lbl == 'intercept':
-            cols.append(np.ones(len(df)))
-        elif lbl in FEATURE_NAMES:
-            cols.append(np.array(
-                [DATASET_METRICS[d][lbl] for d in df['dataset']], dtype=float
-            ))
-        elif lbl.startswith('activation='):
-            target = lbl.split('=', 1)[1]
-            cols.append((df['activation'] == target).to_numpy(dtype=float))
-        else:
-            cols.append(np.zeros(len(df)))
-    return np.column_stack(cols)
-
-
-def _bootstrap_r2_ci(df: pd.DataFrame, n_boot: int = DEFAULT_BOOTSTRAP_N,
-                     seed: int = DEFAULT_BOOTSTRAP_RNG_SEED) -> tuple[float, float]:
-    """95% bootstrap CI for the LOO-CV R². Resamples rows with replacement
-    within each LOO fold."""
-    rng = np.random.default_rng(seed)
-    df = df.reset_index(drop=True)
-    boots: list[float] = []
-    for _ in range(n_boot):
-        sampled_dfs = []
-        for ds in sorted(df['dataset'].unique()):
-            sub = df[df['dataset'] == ds]
-            if len(sub) == 0:
+    for pe_cell in sorted(grouped['pe_cell'].unique()):
+        cell_df = grouped[grouped['pe_cell'] == pe_cell]
+        cell_data: dict[str, dict] = {}
+        for feature in FEATURE_NAMES:
+            feat_vals = np.array(
+                [DATASET_METRICS[d][feature] for d in cell_df['dataset']],
+                dtype=float,
+            )
+            psnr_vals = cell_df[metric].to_numpy(dtype=float)
+            if feat_vals.size < 3:
+                cell_data[feature] = {
+                    'rho': float('nan'), 'p_value': float('nan'),
+                    'ci_lo': float('nan'), 'ci_hi': float('nan'),
+                    'n': int(feat_vals.size),
+                    'note': 'insufficient n for Spearman',
+                }
                 continue
-            idx = rng.integers(0, len(sub), size=len(sub))
-            sampled_dfs.append(sub.iloc[idx])
-        boot_df = pd.concat(sampled_dfs, ignore_index=True)
-        try:
-            r2, _, _ = _loo_cv_r2(boot_df)
-        except (np.linalg.LinAlgError, ValueError):
-            continue
-        if math.isfinite(r2):
-            boots.append(r2)
-    if not boots:
-        return (float('nan'), float('nan'))
-    arr = np.asarray(boots)
-    return (float(np.percentile(arr, 2.5)),
-            float(np.percentile(arr, 97.5)))
-
-
-def evaluate_h4(df: pd.DataFrame) -> dict:
-    """Linear regression of held_out_psnr on (L_95, CV, P99_norm) + activation
-    dummies, fit independently per PE cell. LOO-CV R² with bootstrap CI."""
-    
-    if 'held_out_psnr' not in df.columns:
-        return _missing_data_decision('H4', {'held_out_psnr'})
-    sub = _main_grid_cells(df)
-    sub = sub.dropna(subset=['held_out_psnr']).copy()
-    if len(sub) < 8:
-        return _missing_data_decision('H4', {'enough_cells'})
-
-    per_pe: dict[str, dict[str, Any]] = {}
-    for pe_cell in sorted(sub['pe_cell'].unique()):
-        cell_sub = sub[sub['pe_cell'] == pe_cell]
-        n_datasets = cell_sub['dataset'].nunique()
-        if n_datasets < 2:
-            per_pe[pe_cell] = {
-                'r2': float('nan'),
-                'ci_lo': float('nan'),
-                'ci_hi': float('nan'),
-                'n': int(len(cell_sub)),
-                'n_datasets': int(n_datasets),
-                'note': 'insufficient datasets for LOO-CV',
+            rho, pvalue = stats.spearmanr(feat_vals, psnr_vals)
+            ci_lo, ci_hi = _bootstrap_spearman_ci(feat_vals, psnr_vals)
+            cell_data[feature] = {
+                'rho': float(rho), 'p_value': float(pvalue),
+                'ci_lo': float(ci_lo), 'ci_hi': float(ci_hi),
+                'n': int(feat_vals.size),
+                'datasets':  cell_df['dataset'].tolist(),
+                'feature_values': feat_vals.tolist(),
+                'psnr_values':    psnr_vals.tolist(),
+                'note': '',
             }
-            continue
-        r2, y_true, y_pred = _loo_cv_r2(cell_sub)
-        ci_lo, ci_hi = _bootstrap_r2_ci(cell_sub)
-        per_pe[pe_cell] = {
-            'r2': float(r2),
-            'ci_lo': float(ci_lo),
-            'ci_hi': float(ci_hi),
-            'n': int(len(cell_sub)),
-            'n_datasets': int(n_datasets),
-            'y_true': y_true.tolist(),
-            'y_pred': y_pred.tolist(),
-            'note': '',
-        }
+            summary_lines.append(
+                f'  {pe_cell:>15s} / {feature:>9s}: ρ={float(rho):+.3f} '
+                f'(CI {float(ci_lo):+.3f}–{float(ci_hi):+.3f}, '
+                f'p={float(pvalue):.3f})'
+            )
+        per_pe[pe_cell] = cell_data
 
-    # Decision is driven by the point R² alone. The bootstrap CI is reported
-    # for transparency but does NOT gate acceptance: at n=5 datasets with a
-    # wide L_95 range (13–236), LOO-CV R² is fundamentally noisy when the
-    # held-out fold is the outlier — see preregistration §5 "Limitations".
-    n_pass = sum(
-        1 for r in per_pe.values()
-        if math.isfinite(r['r2']) and r['r2'] > H4_ACCEPT_R2
+    summary = (
+        f'Spearman ρ(per-dataset mean PSNR, feature) for {len(per_pe)} PE '
+        f'cells × {len(FEATURE_NAMES)} features:\n' + '\n'.join(summary_lines)
     )
-    n_fail = sum(
-        1 for r in per_pe.values()
-        if math.isfinite(r['r2']) and r['r2'] < H4_REJECT_R2
-    )
-
-    if n_pass >= H4_ACCEPT_MIN_PE_CELLS:
-        decision = 'accepted'
-    elif n_fail >= H4_REJECT_MIN_PE_CELLS:
-        decision = 'rejected'
-    else:
-        decision = 'inconclusive'
 
     return {
-        'name': 'H4 — characterization predicts PE performance',
-        'decision': decision,
-        'reasoning': (
-            f'{n_pass}/{len(per_pe)} PE cells have LOO-CV R² > '
-            f'{H4_ACCEPT_R2} (point estimate). '
-            f'Accept threshold: ≥{H4_ACCEPT_MIN_PE_CELLS} PE cells. '
-            f'Bootstrap CIs reported for transparency but do not gate '
-            f'the decision (see preregistration §5).'
-        ),
-        'statistic': {
-            pe: {'r2': r['r2'], 'ci_lo': r['ci_lo'], 'ci_hi': r['ci_hi']}
-            for pe, r in per_pe.items()
+        'name': '2.3 characterization correlations (Spearman ρ per PE cell × feature)',
+        'summary': summary,
+        'statistics': {
+            pe: {feat: {'rho': info['rho'], 'p_value': info['p_value'],
+                        'ci': (info['ci_lo'], info['ci_hi'])}
+                 for feat, info in feats.items()}
+            for pe, feats in per_pe.items()
         },
-        'threshold': {
-            'accept_r2_gt': H4_ACCEPT_R2,
-            'accept_min_pe_cells': H4_ACCEPT_MIN_PE_CELLS,
-            'reject_r2_lt': H4_REJECT_R2,
-            'reject_min_pe_cells': H4_REJECT_MIN_PE_CELLS,
-        },
-        'n': int(sum(r['n'] for r in per_pe.values())),
+        'n': int(grouped['dataset'].nunique()),    # = 5 (datasets)
         'data': {'per_pe_cell': per_pe},
-        'notes': '',
+        'notes': (
+            'n=5 datasets per correlation. Spearman ρ is rank-only — '
+            'we make no linearity claim. Sign convention: positive ρ means '
+            'higher feature value associates with higher PSNR. See '
+            'preregistration §2.3 for the theoretical sign priors.'
+        ),
     }
 
 
 # ============================================================================
-# H5a — Post-saturation tail (over-shooting L_max wastes parameters)
+# 2.4 SH L_max ablation (post- and pre-saturation regimes)
 # ============================================================================
-def evaluate_h5a(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
-    """For SH datasets with L_95 < 32: PSNR(matched L_max) within 0.5 dB of L_max=32.
-
-    Δ_match = PSNR(matched) - PSNR(L_max=32), paired by (activation, dataset)
-    across the SH cells and the low-bandwidth datasets.
-    """
-    main_sh = _sh_cells_at_lmax(df, SH_LMAX_DEFAULT)
-    deltas: list[tuple] = []
-    for ds, lmax_matched in SH_LMAX_H5A.items():
-        matched = _sh_cells_at_lmax(df, lmax_matched)
-        m = matched[matched['dataset'] == ds]
-        b = main_sh[main_sh['dataset'] == ds]
-        if len(m) == 0 or len(b) == 0:
+def _sh_lmax_paired_deltas(
+    df: pd.DataFrame,
+    default_lmax: int,
+    other_lmax_per_dataset: dict[str, int],
+    metric: str,
+    sign: int,
+) -> list[tuple[str, str, int, float]]:
+    """Helper: list of (activation, dataset, other_lmax, Δ) tuples where
+    Δ = sign · (PSNR(other_lmax) − PSNR(default_lmax))."""
+    default_sh = _sh_cells_at_lmax(df, default_lmax)
+    deltas: list[tuple[str, str, int, float]] = []
+    for ds, other_lmax in other_lmax_per_dataset.items():
+        other = _sh_cells_at_lmax(df, other_lmax)
+        a = other[other['dataset'] == ds]
+        b = default_sh[default_sh['dataset'] == ds]
+        if len(a) == 0 or len(b) == 0:
             continue
-        merged = m.merge(b, on=['activation'], suffixes=('_matched', '_default'))
+        merged = a.merge(b, on=['activation'],
+                         suffixes=('_other', '_default'))
         for _, row in merged.iterrows():
-            mp = row.get(f'{metric}_matched')
+            mp = row.get(f'{metric}_other')
             dp = row.get(f'{metric}_default')
             if mp is None or dp is None or pd.isna(mp) or pd.isna(dp):
                 continue
-            deltas.append((row['activation'], ds, lmax_matched, float(mp - dp)))
+            deltas.append(
+                (row['activation'], ds, int(other_lmax),
+                 sign * float(mp - dp))
+            )
+    return deltas
 
-    if len(deltas) < 3:
-        return _missing_data_decision('H5a', {'enough_paired_observations'})
 
-    delta_values = np.array([d[3] for d in deltas])
+def _summarize_deltas(label: str, deltas: list[tuple],
+                      delta_idx: int) -> dict:
+    """Common summary: median + bootstrap CI + diagnostic Wilcoxon."""
+    if len(deltas) < 2:
+        return _missing_data(label, {'paired_observations'})
+    delta_values = np.array([d[delta_idx] for d in deltas], dtype=float)
     median = float(np.median(delta_values))
-    try:
-        shifted = delta_values + 0.5
-        if np.allclose(shifted, shifted[0]):
-            pvalue = 0.5
-            wstat = 0.0
-        else:
-            wresult = stats.wilcoxon(shifted, alternative='greater',
-                                     zero_method='wilcox')
-            pvalue = float(wresult.pvalue)
-            wstat = float(wresult.statistic)
-    except ValueError as e:
-        return _err_decision('H5a', f'wilcoxon failed: {e}')
-
-    if median > H5A_ACCEPT_MARGIN_DB and pvalue < 0.05:
-        decision = 'accepted'
-    elif median < H5A_REJECT_MARGIN_DB:
-        decision = 'rejected'
+    ci_lo, ci_hi = _bootstrap_median_ci(delta_values)
+    if np.allclose(delta_values, 0.0, atol=1e-12):
+        wstat, pvalue = 0.0, 1.0
     else:
-        decision = 'inconclusive'
-
+        try:
+            w = stats.wilcoxon(delta_values, alternative='greater',
+                               zero_method='wilcox')
+            wstat, pvalue = float(w.statistic), float(w.pvalue)
+        except ValueError:
+            wstat, pvalue = float('nan'), float('nan')
     return {
-        'name': 'H5a — post-saturation tail (matched L_max retains PSNR)',
-        'decision': decision,
-        'reasoning': (
-            f'median Δ_match = {median:.3f} dB (n={len(delta_values)}); '
-            f'Wilcoxon W = {wstat:.2f}, p = {pvalue:.4f}. '
-            f'Accept if median > {H5A_ACCEPT_MARGIN_DB} dB and p < 0.05.'
-        ),
-        'statistic': {
-            'median_delta_db': median,
-            'wilcoxon_W': wstat,
-            'p_value': pvalue,
-        },
-        'threshold': {
-            'accept_median_db_gt': H5A_ACCEPT_MARGIN_DB,
-            'accept_p_lt': 0.05,
-            'reject_median_db_lt': H5A_REJECT_MARGIN_DB,
-        },
-        'n': int(len(delta_values)),
-        'data': {
-            'deltas': [
-                {'activation': a, 'dataset': d, 'lmax_matched': l, 'delta_db': v}
-                for (a, d, l, v) in deltas
-            ],
-        },
-        'notes': '',
+        'median':            median,
+        'ci_median':         (ci_lo, ci_hi),
+        'wilcoxon_W':        wstat,
+        'wilcoxon_p_value':  pvalue,
+        'delta_values':      delta_values.tolist(),
+        'n':                 int(delta_values.size),
     }
 
 
-# ============================================================================
-# H5b — Pre-saturation slope (under-shooting L_max hurts)
-# ============================================================================
-def evaluate_h5b(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
-    """For SH datasets with L_95 > 32: PSNR(L_max=32) > PSNR(L_max=16).
+def sh_lmax_ablation(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
+    """§2.4 — Paired SH L_max effects in two regimes.
 
-    Δ_LMax = PSNR(L_max=32) - PSNR(L_max=16), paired by (activation, dataset)
-    across the SH cells and the high-bandwidth datasets.
+    Post-saturation (low-bandwidth datasets, L_95 < 32):
+        Δ_match = PSNR(L_max=⌈L_95⌉) − PSNR(L_max=32).
+    Pre-saturation (high-bandwidth datasets, L_95 > 32):
+        Δ_LMax = PSNR(L_max=32) − PSNR(L_max=16).
+
+    Reports per-regime median + bootstrap CI + diagnostic Wilcoxon, plus
+    the full per-cell delta arrays for plotting.
     """
-    main_sh = _sh_cells_at_lmax(df, SH_LMAX_DEFAULT)
-    h5b_sh = _sh_cells_at_lmax(df, SH_LMAX_H5B)
-    deltas: list[tuple] = []
-    for ds in HIGH_BANDWIDTH_DATASETS:
-        a = h5b_sh[h5b_sh['dataset'] == ds]
-        b = main_sh[main_sh['dataset'] == ds]
-        if len(a) == 0 or len(b) == 0:
-            continue
-        merged = b.merge(a, on=['activation'], suffixes=('_default', '_h5b'))
-        for _, row in merged.iterrows():
-            dp = row.get(f'{metric}_default')
-            hp = row.get(f'{metric}_h5b')
-            if dp is None or hp is None or pd.isna(dp) or pd.isna(hp):
-                continue
-            deltas.append((row['activation'], ds, float(dp - hp)))
+    # Post-saturation regime
+    post_deltas = _sh_lmax_paired_deltas(
+        df, default_lmax=SH_LMAX_DEFAULT,
+        other_lmax_per_dataset=SH_LMAX_H5A,
+        metric=metric, sign=+1,
+    )
+    post = _summarize_deltas('sh_lmax_ablation/post_saturation', post_deltas,
+                             delta_idx=3)
 
-    if len(deltas) < 3:
-        return _missing_data_decision('H5b', {'enough_paired_observations'})
+    # Pre-saturation regime
+    pre_deltas = _sh_lmax_paired_deltas(
+        df, default_lmax=SH_LMAX_DEFAULT,
+        other_lmax_per_dataset={ds: SH_LMAX_H5B for ds in HIGH_BANDWIDTH_DATASETS},
+        metric=metric, sign=-1,  # PSNR(L_max=32) − PSNR(L_max=16)
+    )
+    pre = _summarize_deltas('sh_lmax_ablation/pre_saturation', pre_deltas,
+                            delta_idx=3)
 
-    delta_values = np.array([d[2] for d in deltas])
-    median = float(np.median(delta_values))
-    try:
-        if np.allclose(delta_values, delta_values[0]):
-            pvalue = 0.5
-            wstat = 0.0
-        else:
-            wresult = stats.wilcoxon(delta_values, alternative='greater',
-                                     zero_method='wilcox')
-            pvalue = float(wresult.pvalue)
-            wstat = float(wresult.statistic)
-    except ValueError as e:
-        return _err_decision('H5b', f'wilcoxon failed: {e}')
-
-    if median > H5B_ACCEPT_DELTA_DB and pvalue < 0.05:
-        decision = 'accepted'
-    elif median <= H5B_REJECT_DELTA_DB:
-        decision = 'rejected'
-    else:
-        decision = 'inconclusive'
+    summary = (
+        f"Post-saturation Δ_match (L_max=⌈L_95⌉ − L_max=32): "
+        f"median={post.get('median', float('nan')):.3f} dB "
+        f"(CI {post.get('ci_median', (float('nan'),)*2)[0]:.3f}"
+        f"–{post.get('ci_median', (float('nan'),)*2)[1]:.3f}, "
+        f"n={post.get('n', 0)}). "
+        f"Pre-saturation Δ_LMax (L_max=32 − L_max=16): "
+        f"median={pre.get('median', float('nan')):.3f} dB "
+        f"(CI {pre.get('ci_median', (float('nan'),)*2)[0]:.3f}"
+        f"–{pre.get('ci_median', (float('nan'),)*2)[1]:.3f}, "
+        f"n={pre.get('n', 0)})."
+    )
 
     return {
-        'name': 'H5b — pre-saturation slope (more L_max helps when L_95 > 32)',
-        'decision': decision,
-        'reasoning': (
-            f'median Δ_LMax = {median:.3f} dB (n={len(delta_values)}); '
-            f'Wilcoxon W = {wstat:.2f}, p = {pvalue:.4f}. '
-            f'Accept if median > {H5B_ACCEPT_DELTA_DB} dB and p < 0.05.'
-        ),
-        'statistic': {
-            'median_delta_db': median,
-            'wilcoxon_W': wstat,
-            'p_value': pvalue,
+        'name': '2.4 SH L_max ablation (post- and pre-saturation regimes)',
+        'summary': summary,
+        'statistics': {
+            'post_saturation': {k: v for k, v in post.items()
+                                if k not in ('delta_values',)},
+            'pre_saturation':  {k: v for k, v in pre.items()
+                                if k not in ('delta_values',)},
         },
-        'threshold': {
-            'accept_median_db_gt': H5B_ACCEPT_DELTA_DB,
-            'accept_p_lt': 0.05,
-            'reject_median_db_le': H5B_REJECT_DELTA_DB,
-        },
-        'n': int(len(delta_values)),
+        'n': int(post.get('n', 0)) + int(pre.get('n', 0)),
         'data': {
-            'deltas': [
+            'post_saturation_deltas': [
+                {'activation': a, 'dataset': d, 'lmax_matched': lmax, 'delta_db': v}
+                for (a, d, lmax, v) in post_deltas
+            ],
+            'pre_saturation_deltas': [
                 {'activation': a, 'dataset': d, 'delta_db': v}
-                for (a, d, v) in deltas
+                for (a, d, _lmax, v) in pre_deltas
             ],
         },
-        'notes': '',
-    }
-
-
-# ============================================================================
-# Helpers for missing-data / error decisions
-# ============================================================================
-def _missing_data_decision(name: str, missing: set) -> dict:
-    return {
-        'name': name,
-        'decision': 'inconclusive',
-        'reasoning': f'Insufficient data for {name}; missing: {sorted(missing)}',
-        'statistic': {},
-        'threshold': {},
-        'n': 0,
-        'data': {},
-        'notes': 'skipped due to missing data',
-    }
-
-
-def _err_decision(name: str, msg: str) -> dict:
-    return {
-        'name': name,
-        'decision': 'inconclusive',
-        'reasoning': f'Test failed: {msg}',
-        'statistic': {},
-        'threshold': {},
-        'n': 0,
-        'data': {},
-        'notes': f'error: {msg}',
+        'notes': (
+            'Wilcoxon p-values are diagnostics, not pass/fail criteria. '
+            'At n=6 (post-saturation) the smallest achievable two-sided p '
+            'is ~0.031; at n=9 (pre-saturation) it is ~0.004.'
+        ),
     }

@@ -17,12 +17,11 @@ import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(REPO_ROOT, 'src'))
-sys.path.insert(0, os.path.join(REPO_ROOT, 'scripts'))
 
 # Import the launcher as a module (it's set up to be importable).
 import importlib.util
 _spec = importlib.util.spec_from_file_location(
-    'run_grid', os.path.join(REPO_ROOT, 'scripts', 'run_grid.py'),
+    'run_grid', os.path.join(REPO_ROOT, 'src', 'run_grid.py'),
 )
 run_grid = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(run_grid)

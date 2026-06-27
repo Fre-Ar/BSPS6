@@ -96,34 +96,6 @@ PE_CELLS: dict[str, dict[str, Any]] = {
     },
 }
 
-
-# ----- INR-Bench published baselines (preregistration §3.2) -----------------
-# Image Regression column of Table III (Li et al. 2025), where directly
-# comparable. Soft references for pilot sanity-checks only — Euclidean
-# 2D image regression is not strictly identical to spherical regression,
-# so we do NOT use these as pass/fail targets. Filled where the value has
-# been cross-referenced against the paper; the rest left as None.
-INR_BENCH_BASELINES: dict[str, float | None] = {
-    # ReLU row
-    'relu__none_angular':     None,
-    'relu__none_cartesian':   None,
-    'relu__rff':              33.65,  # ReLU + RFF, Table III (prereg §3.2).
-    'relu__sh':               None,
-    'relu__fkan':             None,
-    # ScaledSine row
-    'scaled_sine__none_angular':   44.44,  # ScaledSine + Id., Table III.
-    'scaled_sine__none_cartesian': None,
-    'scaled_sine__rff':            None,
-    'scaled_sine__sh':             None,
-    'scaled_sine__fkan':           None,
-    # Gaussian row
-    'gaussian__none_angular':   None,
-    'gaussian__none_cartesian': None,
-    'gaussian__rff':            None,
-    'gaussian__sh':             None,
-    'gaussian__fkan':           34.70,  # Gaussian + FKAN, Table III.
-}
-
 # ----- Display names --------------------------------------------------------
 _ACT_DISPLAY = {
     'relu':         'ReLU',
@@ -188,12 +160,6 @@ def cell_cli_args(cell_key: str) -> list[str]:
     for flag, value in cell_config(cell_key).items():
         args.extend([f'--{flag}', str(value)])
     return args
-
-
-def inr_bench_baseline(cell_key: str) -> float | None:
-    """INR-Bench published image-regression PSNR (dB) for `cell_key`,
-    or None if no directly comparable number is tabulated."""
-    return INR_BENCH_BASELINES.get(cell_key)
 
 
 # Derived constants (handy for tests and reports — they always stay in sync
