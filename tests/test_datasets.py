@@ -159,19 +159,51 @@ def test_sh_y00_constant_and_correct() -> None:
 
 def test_sh_orthonormality_on_gauss_legendre() -> None:
     """
-    Verify ∫ Y_lm Y_l'm' dΩ = δ_ll' δ_mm' numerically on a Gauss-Legendre
+    Verify ∫ Y_lm Y_l'm' dΩ = δ_ll' δ_mm' numerically on a Gauss–Legendre
     lat grid (exact quadrature in cos(θ) for low L_max), plus uniform
     longitude quadrature. Small L_max so the test is fast.
+
+    Windows / BLAS note
+    -------------------
+    Both `np.polynomial.legendre.leggauss(n)` (LAPACK eigenvalues of a small
+    tridiagonal matrix) and `matrix @ matrix` go through whatever BLAS /
+    LAPACK NumPy is linked against. The PyPI NumPy wheels for Windows link
+    against OpenBLAS, which is known to deadlock silently when its thread
+    pool gets confused by PyTorch's own OpenMP runtime — the symptom is
+    exactly what you see here: the test prints its header and then hangs
+    forever with no traceback, no CPU usage on the offending thread, no
+    exception. On macOS NumPy uses Accelerate (no shared thread pool with
+    torch) and the issue doesn't manifest.
+
+    Workarounds:
+      1. Run with the BLAS thread pool pinned to 1 BEFORE importing numpy:
+             PowerShell:  $env:OPENBLAS_NUM_THREADS = '1'
+                          python tests/test_datasets.py
+             cmd:         set OPENBLAS_NUM_THREADS=1 && python tests/...
+         (Set MKL_NUM_THREADS=1 too if your NumPy is MKL-linked.)
+      2. Install NumPy from conda-forge instead of PyPI — it ships a
+         differently-configured OpenBLAS.
+
+    To make this test less of a tripwire, we (a) print progress at every
+    BLAS-using step with flush=True so any future hang is immediately
+    localized, and (b) compute the Gram matrix with explicit non-BLAS
+    reductions instead of `@`. We still call `leggauss` (the Gauss–Legendre
+    nodes are essential to "exact" quadrature for the test's tight 1e-6
+    threshold); if THAT line hangs, the workarounds above are the fix —
+    we can't sidestep LAPACK without changing the test's semantics.
     """
-    print('\n[SH] orthonormality on Gauss-Legendre grid, L_max=4 ...')
+    print('\n[SH] orthonormality on Gauss-Legendre grid, L_max=4 ...',
+          flush=True)
     L_max = 4
     n_lat = 16  # > L_max + 1 for exact Gauss–Legendre in cos(θ)
     n_lon = 2 * (L_max + 1) + 2  # > 2 L_max for exact trig quadrature
 
+    print('  → computing Gauss-Legendre nodes (LAPACK) ...', flush=True)
     x_nodes, w_x = np.polynomial.legendre.leggauss(n_lat)
     lats_deg = np.degrees(np.arcsin(x_nodes)).astype(np.float64)
     lons_deg = np.linspace(-180.0, 180.0, n_lon, endpoint=False).astype(np.float64)
 
+    print('  → computing SH features ...', flush=True)
     sh = _sh_features(lats_deg, lons_deg, L_max)     # (H, W, (L+1)^2)
     H, W, D = sh.shape
     # dΩ = sin(θ) dθ dφ = dx dφ. Integrand weights: w_x[i] * dφ.
@@ -179,11 +211,25 @@ def test_sh_orthonormality_on_gauss_legendre() -> None:
     weights = (w_x[:, None] * d_phi * np.ones((1, W))).astype(np.float64)  # (H, W)
     flat_sh = sh.reshape(H * W, D).astype(np.float64)
     flat_w = weights.reshape(H * W)
-    G = (flat_sh.T * flat_w) @ flat_sh
+
+    # Gram matrix without BLAS. The natural expression
+    #     G = (flat_sh.T * flat_w) @ flat_sh
+    # routes through numpy.matmul → BLAS GEMM, which is where the Windows
+    # OpenBLAS / torch-OpenMP deadlock hits. The problem sizes here are
+    # tiny (D = (L+1)² = 25, HW = 192) so an explicit per-column reduction
+    # is microseconds — there's no performance reason to prefer GEMM.
+    print('  → computing Gram matrix (BLAS-free reduction) ...', flush=True)
+    weighted = flat_sh * flat_w[:, None]               # (HW, D)
+    G = np.empty((D, D), dtype=np.float64)
+    for d in range(D):
+        # G[d, :] = Σ_i weighted[i, d] · flat_sh[i, :]
+        G[d] = (weighted[:, d:d + 1] * flat_sh).sum(axis=0)
     I = np.eye(D)
     err = float(np.abs(G - I).max())
-    print(f'  max|Gram - I| = {err:.3e} (expect < 1e-6 for exact quadrature)')
+    print(f'  max|Gram - I| = {err:.3e} (expect < 1e-6 for exact quadrature)',
+          flush=True)
     assert err < 1e-6, f'SH non-orthonormal: max|Gram - I| = {err}'
+
 
 
 def main() -> None:

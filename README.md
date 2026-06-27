@@ -385,6 +385,24 @@ platforms; the analysis pipeline treats them uniformly.
 
 ## 10. Troubleshooting
 
+* **A test hangs silently on Windows** (most often `test_datasets.py`
+  inside `test_sh_orthonormality_on_gauss_legendre`, or any test that
+  follows a `torch` import and then calls `numpy.dot` / `@` / LAPACK) —
+  this is a known OpenBLAS thread-pool deadlock in the PyPI NumPy wheels
+  for Windows. NumPy's OpenBLAS and PyTorch's bundled OpenMP runtime
+  fight over thread pinning. Pin NumPy's BLAS to a single thread before
+  launching Python:
+
+  ```powershell
+  $env:OPENBLAS_NUM_THREADS = '1'
+  $env:MKL_NUM_THREADS      = '1'        # harmless if NumPy isn't MKL-linked
+  python tests/test_datasets.py
+  ```
+
+  Or switch to a conda-forge NumPy (`conda install -c conda-forge numpy`),
+  which ships a differently-configured OpenBLAS. The training pipeline
+  itself doesn't seem to trigger this in practice (all matmuls go through
+  torch's own BLAS), but the test files use NumPy directly.
 * **`pip install -r requirements-preprocess.txt` fails on Windows
   while building healpy** (errors mentioning `cfitsio`, `chealpix`, or
   `Microsoft Visual C++`) — healpy has no Windows pip wheels. Use
