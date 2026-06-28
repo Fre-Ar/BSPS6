@@ -306,7 +306,7 @@ def run_cell(cell: dict, log_root: str, runs_csv: str) -> int:
     os.makedirs(save_dir, exist_ok=True)
 
     args = [
-        sys.executable, '-u', 'main.py',
+        sys.executable, '-u', 'src/main.py',
         '--dataset', cell['dataset'],
         '--seed',    str(cell['seed']),
         '--save_dir', save_dir,

@@ -43,6 +43,10 @@ def _dataloader_num_workers() -> int:
         return 4
     return 0
 
+def _persistent_workers() -> bool:
+    """Whether DataLoader workers should persist across epochs."""
+    return _dataloader_num_workers() > 0
+
 class BaseCoordSystem(LightningModule, abc.ABC):
     def __init__(self, hparams: Namespace):
         super().__init__()
@@ -69,6 +73,7 @@ class BaseCoordSystem(LightningModule, abc.ABC):
             self.dataset,
             shuffle=True,
             num_workers=_dataloader_num_workers(),
+            persistent_workers=_persistent_workers(),
             batch_size=self.hparams.batch_size,
             pin_memory=is_cuda(),
         )
@@ -78,6 +83,7 @@ class BaseCoordSystem(LightningModule, abc.ABC):
             self.dataset,
             shuffle=False,
             num_workers=_dataloader_num_workers(),
+            persistent_workers=_persistent_workers(),
             batch_size=self.hparams.batch_size,
             pin_memory=is_cuda(),
         )
