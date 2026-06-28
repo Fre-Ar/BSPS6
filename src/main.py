@@ -1,3 +1,10 @@
+# ---------------------------------------------------------------------------
+# Silence pytorch's "triton not found; flop counting will not work for triton
+# kernels" log line.
+# This MUST stay before `import torch`.
+import logging as _logging
+_logging.getLogger('torch.utils.flop_counter').setLevel(_logging.ERROR)
+
 
 from pytorch_lightning import seed_everything
 import xarray as xr
