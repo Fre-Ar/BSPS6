@@ -233,7 +233,7 @@ def _bootstrap_eta_and_diffs(
     )
 
 
-def variance_decomposition(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
+def variance_decomposition(df: pd.DataFrame, metric: str = 'reconstruction_psnr') -> dict:
     """§2.1 — Decompose PSNR variance over {pe, activation, dataset}.
 
     Reports per-factor η² with bootstrap CIs and the three pairwise difference
@@ -292,7 +292,7 @@ def variance_decomposition(df: pd.DataFrame, metric: str = 'held_out_psnr') -> d
 # ============================================================================
 # 2.2 Polar-penalty contrast (none_angular vs none_cartesian)
 # ============================================================================
-def polar_penalty_contrast(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
+def polar_penalty_contrast(df: pd.DataFrame, metric: str = 'reconstruction_psnr') -> dict:
     """§2.2 — Paired difference of polar penalty (none_angular − none_cartesian),
     paired by (activation, dataset)."""
     polar_col = f'{metric}_polar'
@@ -392,7 +392,7 @@ def _bootstrap_spearman_ci(
 
 def characterization_correlations(
     df: pd.DataFrame,
-    metric: str = 'held_out_psnr',
+    metric: str = 'reconstruction_psnr',
 ) -> dict:
     """§2.3 — Spearman rank correlation of per-dataset mean PSNR vs each of
     (L_95, CV, P99_norm), computed per PE cell. 5 PEs × 3 features = 15
@@ -534,7 +534,7 @@ def _summarize_deltas(label: str, deltas: list[tuple],
     }
 
 
-def sh_lmax_ablation(df: pd.DataFrame, metric: str = 'held_out_psnr') -> dict:
+def sh_lmax_ablation(df: pd.DataFrame, metric: str = 'reconstruction_psnr') -> dict:
     """§2.4 — Paired SH L_max effects in two regimes.
 
     Post-saturation (low-bandwidth datasets, L_95 < 32):

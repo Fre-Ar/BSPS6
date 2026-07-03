@@ -128,11 +128,19 @@ def write_analysis_table(d: dict, path: str) -> None:
     with open(path, 'w') as f:
         f.write('\n'.join(lines) + '\n')
 
+def _metric_display(metric: str) -> str:
+    """Human-readable label for a PSNR metric column name."""
+    return {
+        'reconstruction_psnr': 'Reconstruction PSNR',
+        'held_out_psnr':       'Held-out PSNR',
+    }.get(metric, metric)
 
-def write_summary_md(results: dict[str, dict], path: str) -> None:
+
+def write_summary_md(results: dict[str, dict], path: str, metric: str) -> None:
     """Top-level summary across all analyses."""
     os.makedirs(os.path.dirname(os.path.abspath(path)) or '.', exist_ok=True)
     lines = ['# Analysis summary\n']
+    lines.append(f'**Primary metric:** `{metric}` ({_metric_display(metric)}).\n')
     lines.append('| Analysis | Sample n |')
     lines.append('|----------|----------|')
     for key, d in results.items():
@@ -152,7 +160,8 @@ def write_summary_md(results: dict[str, dict], path: str) -> None:
 # ============================================================================
 def write_figures(results: dict[str, dict],
                   df: pd.DataFrame,
-                  figures_dir: str) -> None:
+                  figures_dir: str,
+                  metric: str) -> None:
     try:
         import matplotlib
         matplotlib.use('Agg')
@@ -164,23 +173,23 @@ def write_figures(results: dict[str, dict],
     os.makedirs(figures_dir, exist_ok=True)
     _fig_variance_decomposition(
         results.get('variance_decomposition', {}),
-        os.path.join(figures_dir, 'variance_decomposition.png'), plt,
+        os.path.join(figures_dir, 'variance_decomposition.png'), plt, metric,
     )
     _fig_polar_penalty(
         results.get('polar_penalty_contrast', {}), df,
-        os.path.join(figures_dir, 'polar_penalty_contrast.png'), plt,
+        os.path.join(figures_dir, 'polar_penalty_contrast.png'), plt, metric,
     )
     _fig_characterization_correlations(
         results.get('characterization_correlations', {}),
-        os.path.join(figures_dir, 'characterization_correlations.png'), plt,
+        os.path.join(figures_dir, 'characterization_correlations.png'), plt, metric,
     )
     _fig_sh_lmax_ablation(
         results.get('sh_lmax_ablation', {}),
-        os.path.join(figures_dir, 'sh_lmax_ablation.png'), plt,
+        os.path.join(figures_dir, 'sh_lmax_ablation.png'), plt, metric,
     )
 
 
-def _fig_variance_decomposition(d: dict, path: str, plt) -> None:
+def _fig_variance_decomposition(d: dict, path: str, plt, metric: str) -> None:
     eta = d.get('data', {}).get('eta_sq', {})
     ci  = d.get('data', {}).get('ci', {})
     if not eta:
@@ -193,24 +202,26 @@ def _fig_variance_decomposition(d: dict, path: str, plt) -> None:
     ax.bar(factors, values, yerr=[err_lo, err_hi], capsize=4,
            color=['#4c72b0', '#dd8452', '#55a868'])
     ax.set_ylabel('η²  (SS_factor / SS_total)')
-    ax.set_title('Variance decomposition of held-out PSNR')
+    ax.set_title(f'Variance decomposition of {_metric_display(metric)}')
     ax.grid(True, axis='y', alpha=0.3)
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
 
 
-def _fig_polar_penalty(d: dict, df: pd.DataFrame, path: str, plt) -> None:
+def _fig_polar_penalty(d: dict, df: pd.DataFrame, path: str, plt, metric: str) -> None:
     from analysis.decisions import _pe_cell_key
-    if not d or 'held_out_psnr_polar' not in df.columns:
+    polar_col = f'{metric}_polar'
+    eq_col    = f'{metric}_equatorial'
+    if not d or polar_col not in df.columns:
         return
     sub = df[df['status'] == 'completed'].copy() if 'status' in df.columns else df
     if sub.empty:
         return
     sub['pe_cell'] = [_pe_cell_key(c, p) for c, p in zip(sub['ce'], sub['pe'])]
     grouped = sub.groupby('pe_cell').agg(
-        polar=('held_out_psnr_polar', 'mean'),
-        equatorial=('held_out_psnr_equatorial', 'mean'),
+        polar=(polar_col, 'mean'),
+        equatorial=(eq_col, 'mean'),
     )
     if grouped.empty:
         return
@@ -221,8 +232,8 @@ def _fig_polar_penalty(d: dict, df: pd.DataFrame, path: str, plt) -> None:
     ax.bar(x + width / 2, grouped['equatorial'], width, label='equatorial (|φ|<30°)')
     ax.set_xticks(x)
     ax.set_xticklabels(grouped.index, rotation=20, ha='right')
-    ax.set_ylabel('held_out PSNR (dB)')
-    ax.set_title('Polar vs equatorial PSNR per PE cell')
+    ax.set_ylabel(f'{_metric_display(metric)} (dB)')
+    ax.set_title(f'Polar vs equatorial {_metric_display(metric)} per PE cell')
     ax.legend()
     ax.grid(True, axis='y', alpha=0.3)
     fig.tight_layout()
@@ -230,7 +241,7 @@ def _fig_polar_penalty(d: dict, df: pd.DataFrame, path: str, plt) -> None:
     plt.close(fig)
 
 
-def _fig_characterization_correlations(d: dict, path: str, plt) -> None:
+def _fig_characterization_correlations(d: dict, path: str, plt, metric: str) -> None:
     per_pe = d.get('data', {}).get('per_pe_cell', {})
     if not per_pe:
         return
@@ -251,13 +262,14 @@ def _fig_characterization_correlations(d: dict, path: str, plt) -> None:
             ax.text(j, i, f'{mat[i, j]:+.2f}', ha='center', va='center',
                     color='black' if abs(mat[i, j]) < 0.6 else 'white', fontsize=9)
     fig.colorbar(im, ax=ax, label='Spearman ρ')
-    ax.set_title('Spearman ρ(per-dataset mean PSNR, feature) — n=5 datasets')
+    ax.set_title(f'Spearman ρ(per-dataset mean {_metric_display(metric)}, '
+                 f'feature) —\nn=5 datasets')
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
 
 
-def _fig_sh_lmax_ablation(d: dict, path: str, plt) -> None:
+def _fig_sh_lmax_ablation(d: dict, path: str, plt, metric: str) -> None:
     post = d.get('data', {}).get('post_saturation_deltas', [])
     pre  = d.get('data', {}).get('pre_saturation_deltas', [])
     if not post and not pre:
@@ -269,8 +281,9 @@ def _fig_sh_lmax_ablation(d: dict, path: str, plt) -> None:
             ax_a.scatter([ds] * len(sub), sub['delta_db'], s=40,
                          label=f"{ds} (L_max={int(sub['lmax_matched'].iloc[0])})")
         ax_a.axhline(0, color='k', lw=0.5)
-        ax_a.set_ylabel('Δ_match (matched − default L_max=32, dB)')
-        ax_a.set_title('Post-saturation (low-bandwidth datasets)')
+        ax_a.set_ylabel('Δ_match (matched - default L_max=32, dB)')
+        ax_a.set_title(f'Post-saturation (low-bandwidth) — '
+                       f'{_metric_display(metric)}')
         ax_a.legend(fontsize=8)
         ax_a.grid(True, alpha=0.3)
     if pre:
@@ -278,8 +291,9 @@ def _fig_sh_lmax_ablation(d: dict, path: str, plt) -> None:
         for ds, sub in df_b.groupby('dataset'):
             ax_b.scatter([ds] * len(sub), sub['delta_db'], s=40, label=ds)
         ax_b.axhline(0, color='k', lw=0.5)
-        ax_b.set_ylabel('Δ_LMax (L_max=32 − L_max=16, dB)')
-        ax_b.set_title('Pre-saturation (high-bandwidth datasets)')
+        ax_b.set_ylabel('Δ_LMax (L_max=32 - L_max=16, dB)')
+        ax_b.set_title(f'Pre-saturation (high-bandwidth) — '
+                       f'{_metric_display(metric)}')
         ax_b.legend(fontsize=8)
         ax_b.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -297,6 +311,8 @@ def main() -> None:
     )
     parser.add_argument('--runs_csv', default='results/runs.csv')
     parser.add_argument('--output_dir', default='results/analysis')
+    parser.add_argument('--metric', default='reconstruction_psnr',
+                        choices=('reconstruction_psnr', 'held_out_psnr'))
     parser.add_argument('--skip_figures', action='store_true',
                         help='Skip figure generation (no matplotlib needed).')
     args = parser.parse_args()
@@ -318,9 +334,10 @@ def main() -> None:
         n_complete = int((df['status'] == 'completed').sum())
         print(f"               {n_complete} rows with status='completed'")
 
+    print(f"[run_analysis] primary metric: {args.metric}")
     results: dict[str, dict] = {}
     for key, fn in ANALYSES:
-        results[key] = fn(df)
+        results[key] = fn(df, metric=args.metric)
 
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
@@ -334,11 +351,12 @@ def main() -> None:
         write_analysis_table(d, os.path.join(tables_dir, f'{key}.md'))
     print(f"[run_analysis] tables → {tables_dir}/")
 
-    write_summary_md(results, os.path.join(output_dir, 'summary.md'))
+    write_summary_md(results, os.path.join(output_dir, 'summary.md'),
+                     metric=args.metric)
     print(f"[run_analysis] summary → {output_dir}/summary.md")
 
     if not args.skip_figures:
-        write_figures(results, df, figures_dir)
+        write_figures(results, df, figures_dir, metric=args.metric)
         print(f"[run_analysis] figures → {figures_dir}/")
 
     # ---- Console summary ----

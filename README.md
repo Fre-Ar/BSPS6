@@ -3,17 +3,13 @@
 End-to-end instructions for setting up the project from a fresh machine and
 running experiments. Tested on macOS (Apple Silicon, MPS) and Windows with an NVIDIA GPU (CUDA).
 
-The benchmark itself, the design rationale, and the analyses are described
-in [`docs/preregistration.md`](docs/preregistration.md). This file is the
-operational how-to.
-
 ---
 
 ## 1. Get the code
 
 ```sh
-git clone https://github.com/Fre-Ar/BSPS6.git
-cd BSPS6
+git clone https://github.com/Fre-Ar/Spherical-INR.git
+cd Spherical-INR
 ```
 
 ---
@@ -226,9 +222,7 @@ you burn 75 GPU-hours on a grid that produces `nan` PSNRs.
 
 ## 6. Run the experiments
 
-Per [`docs/preregistration.md`](docs/preregistration.md) §3.5, the locked
-grid is 90 runs at 1 seed (75 main + 6 SH post-saturation + 9 SH
-pre-saturation).
+The locked grid is 90 runs at 1 seed (75 main + 6 SH post-saturation + 9 SH pre-saturation).
 
 ### 6a. The whole grid
 
@@ -310,8 +304,8 @@ laptop:
 Both are gitignored, so a plain `scp -r` or `rsync` works:
 
 ```sh
-scp -r friend@host:~/BSPS6/results/runs.csv ./results/
-scp -r friend@host:~/BSPS6/logs/grid/         ./logs/
+scp -r friend@host:~/Spherical-INR/results/runs.csv ./results/
+scp -r friend@host:~/Spherical-INR/logs/grid/         ./logs/
 ```
 
 ---

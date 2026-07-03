@@ -1,0 +1,808 @@
+{
+  "variance_decomposition": {
+    "name": "2.1 variance decomposition (PE vs activation vs dataset)",
+    "summary": "\u03b7\u00b2: pe=0.326 (CI 0.192\u20130.525), activation=0.023 (CI 0.002\u20130.142), dataset=0.136 (CI 0.059\u20130.352).",
+    "statistics": {
+      "eta_sq_pe": 0.32597491187560357,
+      "eta_sq_activation": 0.023025230352640782,
+      "eta_sq_dataset": 0.1362409112010517,
+      "ci_pe": [
+        0.1922026582724112,
+        0.5247251507832548
+      ],
+      "ci_activation": [
+        0.0016118919664267304,
+        0.14180895663527504
+      ],
+      "ci_dataset": [
+        0.05899475440535564,
+        0.3522798853577411
+      ],
+      "diff_ci_pe_minus_activation": [
+        0.1074821540696966,
+        0.48509821716047263
+      ],
+      "diff_ci_pe_minus_dataset": [
+        -0.09438512713646975,
+        0.40600955418331575
+      ],
+      "diff_ci_activation_minus_dataset": [
+        -0.3193784912106438,
+        0.012556298681757602
+      ]
+    },
+    "n": 75,
+    "data": {
+      "eta_sq": {
+        "pe": 0.32597491187560357,
+        "activation": 0.023025230352640782,
+        "dataset": 0.1362409112010517
+      },
+      "ci": {
+        "pe": [
+          0.1922026582724112,
+          0.5247251507832548
+        ],
+        "activation": [
+          0.0016118919664267304,
+          0.14180895663527504
+        ],
+        "dataset": [
+          0.05899475440535564,
+          0.3522798853577411
+        ]
+      },
+      "diff_ci": {
+        "pe_minus_activation": [
+          0.1074821540696966,
+          0.48509821716047263
+        ],
+        "pe_minus_dataset": [
+          -0.09438512713646975,
+          0.40600955418331575
+        ],
+        "activation_minus_dataset": [
+          -0.3193784912106438,
+          0.012556298681757602
+        ]
+      }
+    },
+    "notes": ""
+  },
+  "polar_penalty_contrast": {
+    "name": "2.2 polar-penalty contrast (none_angular vs none_cartesian)",
+    "summary": "median \u0394(none_angular \u2212 none_cartesian) = 0.017 dB (95% bootstrap CI -1.361\u20131.413; n=15). Wilcoxon W = 71.00, p = 0.2807 (diagnostic only).",
+    "statistics": {
+      "median_delta_db": 0.01708221435546875,
+      "ci_median_delta_db": [
+        -1.361150741577152,
+        1.4126494407653643
+      ],
+      "wilcoxon_W": 71.0,
+      "wilcoxon_p_value": 0.28070068359375
+    },
+    "n": 15,
+    "data": {
+      "delta_per_activation_dataset": {
+        "('gaussian', 'cmb')": 2.127887725830078,
+        "('gaussian', 'era5')": 6.078269958496087,
+        "('gaussian', 'etopo1')": -1.8198890686035156,
+        "('gaussian', 'hdri_sky')": 2.4667205810546804,
+        "('gaussian', 'hdri_urban')": -1.0804386138916051,
+        "('relu', 'cmb')": -0.11926460266113637,
+        "('relu', 'era5')": -0.8515548706054688,
+        "('relu', 'etopo1')": -1.7871627807617188,
+        "('relu', 'hdri_sky')": -1.9524021148681676,
+        "('relu', 'hdri_urban')": 0.01708221435546875,
+        "('scaled_sine', 'cmb')": 1.0751323699951207,
+        "('scaled_sine', 'era5')": 2.4006271362304688,
+        "('scaled_sine', 'etopo1')": 0.3577728271484375,
+        "('scaled_sine', 'hdri_sky')": -1.361150741577152,
+        "('scaled_sine', 'hdri_urban')": 1.3943099975585938
+      }
+    },
+    "notes": ""
+  },
+  "characterization_correlations": {
+    "name": "2.3 characterization correlations (Spearman \u03c1 per PE cell \u00d7 feature)",
+    "summary": "Spearman \u03c1(per-dataset mean PSNR, feature) for 5 PE cells \u00d7 3 features:\n             fkan /      L_95: \u03c1=-0.300 (CI -1.000\u2013+1.000, p=0.624)\n             fkan /        CV: \u03c1=+0.000 (CI -1.000\u2013+1.000, p=1.000)\n             fkan /  P99_norm: \u03c1=-1.000 (CI -1.000\u2013-1.000, p=0.000)\n     none_angular /      L_95: \u03c1=-0.900 (CI -1.000\u2013-0.111, p=0.037)\n     none_angular /        CV: \u03c1=+0.400 (CI -0.875\u2013+1.000, p=0.505)\n     none_angular /  P99_norm: \u03c1=-0.600 (CI -1.000\u2013+1.000, p=0.285)\n   none_cartesian /      L_95: \u03c1=-0.300 (CI -1.000\u2013+1.000, p=0.624)\n   none_cartesian /        CV: \u03c1=+0.000 (CI -1.000\u2013+1.000, p=1.000)\n   none_cartesian /  P99_norm: \u03c1=-1.000 (CI -1.000\u2013-1.000, p=0.000)\n              rff /      L_95: \u03c1=+0.800 (CI +0.111\u2013+1.000, p=0.104)\n              rff /        CV: \u03c1=-0.700 (CI -1.000\u2013+0.875, p=0.188)\n              rff /  P99_norm: \u03c1=-0.200 (CI -1.000\u2013+1.000, p=0.747)\n               sh /      L_95: \u03c1=-0.800 (CI -1.000\u2013-0.111, p=0.104)\n               sh /        CV: \u03c1=+0.300 (CI -1.000\u2013+1.000, p=0.624)\n               sh /  P99_norm: \u03c1=-0.700 (CI -1.000\u2013+1.000, p=0.188)",
+    "statistics": {
+      "fkan": {
+        "L_95": {
+          "rho": -0.3,
+          "p_value": 0.623837664781073,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        },
+        "CV": {
+          "rho": 0.0,
+          "p_value": 1.0,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        },
+        "P99_norm": {
+          "rho": -0.9999999999999999,
+          "p_value": 1.4042654220543602e-24,
+          "ci": [
+            -1.0,
+            -0.9999999999999999
+          ]
+        }
+      },
+      "none_angular": {
+        "L_95": {
+          "rho": -0.8999999999999998,
+          "p_value": 0.03738607346849874,
+          "ci": [
+            -1.0,
+            -0.1111111111111111
+          ]
+        },
+        "CV": {
+          "rho": 0.39999999999999997,
+          "p_value": 0.5046315754686912,
+          "ci": [
+            -0.8749999999999999,
+            1.0
+          ]
+        },
+        "P99_norm": {
+          "rho": -0.6,
+          "p_value": 0.28475697986529386,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        }
+      },
+      "none_cartesian": {
+        "L_95": {
+          "rho": -0.3,
+          "p_value": 0.623837664781073,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        },
+        "CV": {
+          "rho": 0.0,
+          "p_value": 1.0,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        },
+        "P99_norm": {
+          "rho": -0.9999999999999999,
+          "p_value": 1.4042654220543602e-24,
+          "ci": [
+            -1.0,
+            -0.9999999999999999
+          ]
+        }
+      },
+      "rff": {
+        "L_95": {
+          "rho": 0.7999999999999999,
+          "p_value": 0.10408803866182788,
+          "ci": [
+            0.1111111111111111,
+            1.0
+          ]
+        },
+        "CV": {
+          "rho": -0.7,
+          "p_value": 0.1881204043741873,
+          "ci": [
+            -1.0,
+            0.8749999999999999
+          ]
+        },
+        "P99_norm": {
+          "rho": -0.19999999999999998,
+          "p_value": 0.7470600781046621,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        }
+      },
+      "sh": {
+        "L_95": {
+          "rho": -0.7999999999999999,
+          "p_value": 0.10408803866182788,
+          "ci": [
+            -1.0,
+            -0.1111111111111111
+          ]
+        },
+        "CV": {
+          "rho": 0.3,
+          "p_value": 0.623837664781073,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        },
+        "P99_norm": {
+          "rho": -0.7,
+          "p_value": 0.1881204043741873,
+          "ci": [
+            -1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    "n": 5,
+    "data": {
+      "per_pe_cell": {
+        "fkan": {
+          "L_95": {
+            "rho": -0.3,
+            "p_value": 0.623837664781073,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              236.0,
+              13.0,
+              45.0,
+              31.0,
+              97.0
+            ],
+            "psnr_values": [
+              37.266231536865234,
+              41.44385528564453,
+              37.146890004475914,
+              34.79106140136719,
+              31.41289774576823
+            ],
+            "note": ""
+          },
+          "CV": {
+            "rho": 0.0,
+            "p_value": 1.0,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.162,
+              1.202,
+              0.654,
+              0.656,
+              1.124
+            ],
+            "psnr_values": [
+              37.266231536865234,
+              41.44385528564453,
+              37.146890004475914,
+              34.79106140136719,
+              31.41289774576823
+            ],
+            "note": ""
+          },
+          "P99_norm": {
+            "rho": -0.9999999999999999,
+            "p_value": 1.4042654220543602e-24,
+            "ci_lo": -1.0,
+            "ci_hi": -0.9999999999999999,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.116,
+              0.048,
+              0.129,
+              0.144,
+              0.218
+            ],
+            "psnr_values": [
+              37.266231536865234,
+              41.44385528564453,
+              37.146890004475914,
+              34.79106140136719,
+              31.41289774576823
+            ],
+            "note": ""
+          }
+        },
+        "none_angular": {
+          "L_95": {
+            "rho": -0.8999999999999998,
+            "p_value": 0.03738607346849874,
+            "ci_lo": -1.0,
+            "ci_hi": -0.1111111111111111,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              236.0,
+              13.0,
+              45.0,
+              31.0,
+              97.0
+            ],
+            "psnr_values": [
+              33.66812260945638,
+              38.348262786865234,
+              34.18277359008789,
+              37.690886815389,
+              28.115075429280598
+            ],
+            "note": ""
+          },
+          "CV": {
+            "rho": 0.39999999999999997,
+            "p_value": 0.5046315754686912,
+            "ci_lo": -0.8749999999999999,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.162,
+              1.202,
+              0.654,
+              0.656,
+              1.124
+            ],
+            "psnr_values": [
+              33.66812260945638,
+              38.348262786865234,
+              34.18277359008789,
+              37.690886815389,
+              28.115075429280598
+            ],
+            "note": ""
+          },
+          "P99_norm": {
+            "rho": -0.6,
+            "p_value": 0.28475697986529386,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.116,
+              0.048,
+              0.129,
+              0.144,
+              0.218
+            ],
+            "psnr_values": [
+              33.66812260945638,
+              38.348262786865234,
+              34.18277359008789,
+              37.690886815389,
+              28.115075429280598
+            ],
+            "note": ""
+          }
+        },
+        "none_cartesian": {
+          "L_95": {
+            "rho": -0.3,
+            "p_value": 0.623837664781073,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              236.0,
+              13.0,
+              45.0,
+              31.0,
+              97.0
+            ],
+            "psnr_values": [
+              39.07937367757162,
+              39.82656606038412,
+              35.669867197672524,
+              33.04329490661621,
+              29.448932647705078
+            ],
+            "note": ""
+          },
+          "CV": {
+            "rho": 0.0,
+            "p_value": 1.0,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.162,
+              1.202,
+              0.654,
+              0.656,
+              1.124
+            ],
+            "psnr_values": [
+              39.07937367757162,
+              39.82656606038412,
+              35.669867197672524,
+              33.04329490661621,
+              29.448932647705078
+            ],
+            "note": ""
+          },
+          "P99_norm": {
+            "rho": -0.9999999999999999,
+            "p_value": 1.4042654220543602e-24,
+            "ci_lo": -1.0,
+            "ci_hi": -0.9999999999999999,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.116,
+              0.048,
+              0.129,
+              0.144,
+              0.218
+            ],
+            "psnr_values": [
+              39.07937367757162,
+              39.82656606038412,
+              35.669867197672524,
+              33.04329490661621,
+              29.448932647705078
+            ],
+            "note": ""
+          }
+        },
+        "rff": {
+          "L_95": {
+            "rho": 0.7999999999999999,
+            "p_value": 0.10408803866182788,
+            "ci_lo": 0.1111111111111111,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              236.0,
+              13.0,
+              45.0,
+              31.0,
+              97.0
+            ],
+            "psnr_values": [
+              33.06483014424642,
+              21.92172622680664,
+              25.113375027974445,
+              18.436046918233234,
+              22.25017325083415
+            ],
+            "note": ""
+          },
+          "CV": {
+            "rho": -0.7,
+            "p_value": 0.1881204043741873,
+            "ci_lo": -1.0,
+            "ci_hi": 0.8749999999999999,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.162,
+              1.202,
+              0.654,
+              0.656,
+              1.124
+            ],
+            "psnr_values": [
+              33.06483014424642,
+              21.92172622680664,
+              25.113375027974445,
+              18.436046918233234,
+              22.25017325083415
+            ],
+            "note": ""
+          },
+          "P99_norm": {
+            "rho": -0.19999999999999998,
+            "p_value": 0.7470600781046621,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.116,
+              0.048,
+              0.129,
+              0.144,
+              0.218
+            ],
+            "psnr_values": [
+              33.06483014424642,
+              21.92172622680664,
+              25.113375027974445,
+              18.436046918233234,
+              22.25017325083415
+            ],
+            "note": ""
+          }
+        },
+        "sh": {
+          "L_95": {
+            "rho": -0.7999999999999999,
+            "p_value": 0.10408803866182788,
+            "ci_lo": -1.0,
+            "ci_hi": -0.1111111111111111,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              236.0,
+              13.0,
+              45.0,
+              31.0,
+              97.0
+            ],
+            "psnr_values": [
+              37.39034652709961,
+              49.91958745320638,
+              47.16896184285482,
+              38.44554201761881,
+              29.888595581054688
+            ],
+            "note": ""
+          },
+          "CV": {
+            "rho": 0.3,
+            "p_value": 0.623837664781073,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.162,
+              1.202,
+              0.654,
+              0.656,
+              1.124
+            ],
+            "psnr_values": [
+              37.39034652709961,
+              49.91958745320638,
+              47.16896184285482,
+              38.44554201761881,
+              29.888595581054688
+            ],
+            "note": ""
+          },
+          "P99_norm": {
+            "rho": -0.7,
+            "p_value": 0.1881204043741873,
+            "ci_lo": -1.0,
+            "ci_hi": 1.0,
+            "n": 5,
+            "datasets": [
+              "cmb",
+              "era5",
+              "etopo1",
+              "hdri_sky",
+              "hdri_urban"
+            ],
+            "feature_values": [
+              0.116,
+              0.048,
+              0.129,
+              0.144,
+              0.218
+            ],
+            "psnr_values": [
+              37.39034652709961,
+              49.91958745320638,
+              47.16896184285482,
+              38.44554201761881,
+              29.888595581054688
+            ],
+            "note": ""
+          }
+        }
+      }
+    },
+    "notes": "n=5 datasets per correlation. Spearman \u03c1 is rank-only \u2014 we make no linearity claim. Sign convention: positive \u03c1 means higher feature value associates with higher PSNR. See preregistration \u00a72.3 for the theoretical sign priors."
+  },
+  "sh_lmax_ablation": {
+    "name": "2.4 SH L_max ablation (post- and pre-saturation regimes)",
+    "summary": "Post-saturation \u0394_match (L_max=\u2308L_95\u2309 \u2212 L_max=32): median=-1.767 dB (CI -10.948\u20130.101, n=6). Pre-saturation \u0394_LMax (L_max=32 \u2212 L_max=16): median=4.649 dB (CI -0.655\u20137.026, n=9).",
+    "statistics": {
+      "post_saturation": {
+        "median": -1.7669754028320312,
+        "ci_median": [
+          -10.948354721069336,
+          0.10127925872802734
+        ],
+        "wilcoxon_W": 2.0,
+        "wilcoxon_p_value": 0.96875,
+        "n": 6
+      },
+      "pre_saturation": {
+        "median": 4.6487579345703125,
+        "ci_median": [
+          -0.654556274414066,
+          7.025653839111328
+        ],
+        "wilcoxon_W": 34.0,
+        "wilcoxon_p_value": 0.1015625,
+        "n": 9
+      }
+    },
+    "n": 15,
+    "data": {
+      "post_saturation_deltas": [
+        {
+          "activation": "relu",
+          "dataset": "era5",
+          "lmax_matched": 13,
+          "delta_db": -11.50253677368164
+        },
+        {
+          "activation": "scaled_sine",
+          "dataset": "era5",
+          "lmax_matched": 13,
+          "delta_db": -3.0048980712890625
+        },
+        {
+          "activation": "gaussian",
+          "dataset": "era5",
+          "lmax_matched": 13,
+          "delta_db": -10.394172668457031
+        },
+        {
+          "activation": "relu",
+          "dataset": "hdri_sky",
+          "lmax_matched": 31,
+          "delta_db": -0.2611236572265625
+        },
+        {
+          "activation": "scaled_sine",
+          "dataset": "hdri_sky",
+          "lmax_matched": 31,
+          "delta_db": 0.4636821746826172
+        },
+        {
+          "activation": "gaussian",
+          "dataset": "hdri_sky",
+          "lmax_matched": 31,
+          "delta_db": -0.529052734375
+        }
+      ],
+      "pre_saturation_deltas": [
+        {
+          "activation": "relu",
+          "dataset": "etopo1",
+          "delta_db": 4.6487579345703125
+        },
+        {
+          "activation": "scaled_sine",
+          "dataset": "etopo1",
+          "delta_db": 10.922676086425781
+        },
+        {
+          "activation": "gaussian",
+          "dataset": "etopo1",
+          "delta_db": 7.025653839111328
+        },
+        {
+          "activation": "relu",
+          "dataset": "hdri_urban",
+          "delta_db": 5.6083831787109375
+        },
+        {
+          "activation": "scaled_sine",
+          "dataset": "hdri_urban",
+          "delta_db": 0.623565673828125
+        },
+        {
+          "activation": "gaussian",
+          "dataset": "hdri_urban",
+          "delta_db": 3.518474578857422
+        },
+        {
+          "activation": "relu",
+          "dataset": "cmb",
+          "delta_db": 6.749950408935554
+        },
+        {
+          "activation": "scaled_sine",
+          "dataset": "cmb",
+          "delta_db": -11.1357421875
+        },
+        {
+          "activation": "gaussian",
+          "dataset": "cmb",
+          "delta_db": -0.654556274414066
+        }
+      ]
+    },
+    "notes": "Wilcoxon p-values are diagnostics, not pass/fail criteria. At n=6 (post-saturation) the smallest achievable two-sided p is ~0.031; at n=9 (pre-saturation) it is ~0.004."
+  }
+}

@@ -59,9 +59,12 @@ def _mlp_row(act_key, pe_key, dataset, lmax, psnr, polar, equatorial,
         'dataset': dataset, 'ce': ce, 'act': ACT_TO_FLAG[act_key], 'pe': pe,
         'seed': 42, 'encoding_kwargs_json': json.dumps(ce_kwargs, sort_keys=True),
         'status': status,
-        'held_out_psnr':            psnr,
-        'held_out_psnr_polar':      polar,
-        'held_out_psnr_equatorial': equatorial,
+        'reconstruction_psnr':            psnr,
+        'reconstruction_psnr_polar':      polar,
+        'reconstruction_psnr_equatorial': equatorial,
+        'held_out_psnr':                  psnr,
+        'held_out_psnr_polar':            polar,
+        'held_out_psnr_equatorial':       equatorial,
     }
 
 
@@ -257,7 +260,8 @@ def test_null_pre_saturation_centered_at_zero() -> None:
 def test_empty_df_returns_skipped() -> None:
     print('\n[analysis] empty DataFrame → all analyses skip cleanly ...')
     df = pd.DataFrame(columns=[
-        'dataset', 'ce', 'act', 'pe', 'status', 'held_out_psnr',
+        'dataset', 'ce', 'act', 'pe', 'status',
+        'reconstruction_psnr', 'held_out_psnr',
     ])
     for fn in (variance_decomposition, polar_penalty_contrast,
                characterization_correlations, sh_lmax_ablation):
@@ -274,8 +278,10 @@ def test_failed_rows_excluded() -> None:
     df = generate_happy_runs()
     bad = df.iloc[:5].copy()
     bad['status'] = 'oom'
-    bad['held_out_psnr_polar'] = -100.0
-    bad['held_out_psnr_equatorial'] = 100.0
+    # Poison the columns for both metric families
+    for prefix in ('reconstruction_psnr', 'held_out_psnr'):
+        bad[f'{prefix}_polar'] = -100.0
+        bad[f'{prefix}_equatorial'] = 100.0
     df2 = pd.concat([df, bad], ignore_index=True)
     m1 = polar_penalty_contrast(df)['statistics']['median_delta_db']
     m2 = polar_penalty_contrast(df2)['statistics']['median_delta_db']
